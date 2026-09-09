@@ -89,6 +89,31 @@ OrcaSlicer and QIDI Studio packs SHALL implement the same functional print-start
 - **THEN** the prime line uses available room ahead of first-layer bounds or a fixed safe fallback
 - **AND** nozzle-temperature Z compensation is applied from a known absolute reference after mesh and offset application
 
+### Requirement: Optional minimum chamber startup temperature
+Optimized print start SHALL accept a chamber startup minimum independently of the chamber heating target, with compatible slicer G-code for OrcaSlicer 2.4.2 and later.
+
+#### Scenario: Positive minimum releases startup while heating continues
+- **WHEN** OrcaSlicer start G-code supplies a positive minimum from the initial tool's filament profile
+- **THEN** retained Box filament, fresh Box filament, and external-spool starts wait for that exact minimum before leveling
+- **AND** the minimum is capped at the requested chamber target
+- **AND** chamber heating retains the requested target throughout subsequent leveling and printing without another full-target wait
+- **AND** a zero chamber target or unavailable chamber heater causes no chamber wait
+
+#### Scenario: Independent slicer and macro updates preserve startup
+- **WHEN** the minimum is omitted or zero
+- **THEN** updated macros preserve the existing chamber startup wait threshold of target minus 3 degrees, bounded at zero
+- **AND** existing sliced files and QIDI Studio starts retain their established behavior
+
+#### Scenario: Updated slicer G-code remains usable with older macros
+- **WHEN** updated OrcaSlicer start G-code runs against older optimized macros
+- **THEN** the optional minimum parameter is ignored and the established chamber wait remains active
+
+#### Scenario: Minimum applies to staggered heating
+- **WHEN** staggered heating is enabled and target-bearing start G-code supplies a positive chamber minimum
+- **THEN** the chamber stage waits for the minimum before its configured dwell and nozzle activation
+- **AND** subsequent filament preparation uses the same minimum rather than waiting for the full target
+- **AND** prior no-argument starts preserve their active-target heating behavior
+
 ### Requirement: Filament and QIDI Box state lifecycle
 Optimized macros SHALL keep external-spool runout policy independent from vendor Box recovery, retain filament only when the saved preference equals `1` and physical Box state is provable, and normalize tool mappings only at safe lifecycle boundaries.
 
@@ -140,6 +165,14 @@ Optimized cut, purge, cooldown, cleaning, calibration, and cancellation helpers 
 - **THEN** motion modes, extrusion modes, and temporary acceleration are restored
 - **AND** optional Box objects are called only when available and valid
 - **AND** fixed waits are reduced without replacing required motion completion waits
+
+#### Scenario: Optimized cleanup uses fast non-extruding silicone wipes
+- **WHEN** optimized print-start, purge cleanup, unload cleanup, or staged end cleanup reaches a silicone-wiper pass
+- **THEN** the already-positioned nozzle performs four back-and-forth finishing passes at a commanded 200 mm/s and exits toward the chute
+- **AND** the wipe helper preserves caller motion and extrusion modes, feed settings, and acceleration
+- **AND** the helper performs no extrusion, Y/Z repositioning, heater changes, fixed dwell, or bed scraping
+- **AND** existing purge quantities, temperature gates, optional-hardware guards, and separate rear-bed scraping remain unchanged
+- **AND** vendor cleanup commands and slicer filament-change sequences remain unchanged
 
 #### Scenario: End-print performs staged cooldown safely
 - **WHEN** normal slicer end G-code runs

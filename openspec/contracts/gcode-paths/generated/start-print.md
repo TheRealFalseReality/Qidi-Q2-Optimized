@@ -14,8 +14,8 @@ Ordered invariants:
 - `SET_PRINT_MAIN_STATUS MAIN_STATUS=print_start`
 - `M1002 R1`
 - `G29.0`
-- `OPTIMIZED_PRINT_START_HOME BEDTEMP=[bed_temperature_initial_layer_single] CHAMBER=[chamber_temperature]`
-- `OPTIMIZED_START_PRINT_FILAMENT_PREP EXTRUDER=[initial_no_support_extruder] FIRSTLAYERTEMP=[nozzle_temperature_initial_layer] PURGETEMP={nozzle_temperature_range_high[initial_tool]} BEDTEMP=[bed_temperature_initial_layer_single] CHAMBER=[chamber_temperature]`
+- `OPTIMIZED_PRINT_START_HOME BEDTEMP=[bed_temperature_initial_layer_single] CHAMBER=[chamber_temperature] CHAMBER_MIN_TEMP={chamber_minimal_temperature[initial_tool]}`
+- `OPTIMIZED_START_PRINT_FILAMENT_PREP EXTRUDER=[initial_no_support_extruder] FIRSTLAYERTEMP=[nozzle_temperature_initial_layer] PURGETEMP={nozzle_temperature_range_high[initial_tool]} BEDTEMP=[bed_temperature_initial_layer_single] CHAMBER=[chamber_temperature] CHAMBER_MIN_TEMP={chamber_minimal_temperature[initial_tool]}`
 - `T[initial_tool]`
 - `G90`
 - `G1 Z10 F600`
@@ -119,7 +119,7 @@ Direct visible macro calls in branch slice:
 
 Ordered invariants:
 
-- `_OPTIMIZED_STAGGERED_START_EXPLICIT BEDTEMP={bed_target} CHAMBER={chamber_target} PROBETEMP={probe_target} DWELL={dwell_seconds}`
+- `_OPTIMIZED_STAGGERED_START_EXPLICIT BEDTEMP={bed_target} CHAMBER={chamber_target} PROBETEMP={probe_target} DWELL={dwell_seconds} CHAMBER_MIN_TEMP={params.CHAMBER_MIN_TEMP|default(0)|float}`
 
 Forbidden patterns:
 
@@ -187,7 +187,7 @@ Ordered invariants:
 - `SET_HEATER_TEMPERATURE HEATER=chamber TARGET=0`
 - `OPTIMIZED_WAIT_BED S={bed_target}`
 - `G4 P{dwell_ms}`
-- `OPTIMIZED_WAIT_CHAMBER S={chamber_target}`
+- `OPTIMIZED_WAIT_CHAMBER S={chamber_target} MINIMUM={params.CHAMBER_MIN_TEMP|default(0)|float}`
 - `G4 P{dwell_ms}`
 - `M104 S{probe_target}`
 
@@ -224,11 +224,35 @@ Forbidden patterns:
 - `OPTIMIZED_WAIT_CHAMBER`
 - `G28`
 
+### chamber_start_wait_threshold
+
+Condition: `chamber heater available; positive minimum selects exact threshold, otherwise target minus 3 degrees`
+
+Source: `installer/klipper/tltg-optimized-macros/heaters.cfg:26-42`
+
+Direct visible macro calls in branch slice:
+
+- `set_heater_temperature_scaled`
+
+Ordered invariants:
+
+- `{% set target = params.S|default(0)|float %}`
+- `{% set minimum = params.MINIMUM|default(0)|float %}`
+- `{% set wait_target = ([minimum, target]|min) if minimum > 0 else ([target - 3, 0]|max) %}`
+- `{% if target > 0.0 %}`
+- `SET_HEATER_TEMPERATURE_SCALED HEATER=chamber TARGET={target}`
+- `TEMPERATURE_WAIT SENSOR="heater_generic chamber" MINIMUM={wait_target}`
+
+Forbidden patterns:
+
+- `TARGET={wait_target}`
+- `SAVE_VARIABLE`
+
 ### tool_mapping_reconciliation
 
 Condition: `all optimized starts`
 
-Source: `installer/klipper/tltg-optimized-macros/filament.cfg:217-248`
+Source: `installer/klipper/tltg-optimized-macros/filament.cfg:233-264`
 
 Direct visible macro calls in branch slice:
 
@@ -250,7 +274,7 @@ Forbidden patterns:
 
 Condition: `tltg_keep_loaded_between_prints == 1 and retained physical state is proven`
 
-Source: `installer/klipper/tltg-optimized-macros/filament.cfg:249-286`
+Source: `installer/klipper/tltg-optimized-macros/filament.cfg:265-302`
 
 Direct visible macro calls in branch slice:
 
@@ -262,6 +286,7 @@ Direct visible macro calls in branch slice:
 - `OPTIMIZED_WAIT_CHAMBER`
 - `OPTIMIZED_WAIT_HOTEND`
 - `M106`
+- `_OPTIMIZED_WIPE_NOZZLE`
 - `_OPTIMIZED_REPORT_BED_TEMP`
 - `_OPTIMIZED_PREPARE_PRINT_MESH`
 - `M1002`
@@ -272,9 +297,9 @@ Ordered invariants:
 - `SAVE_VARIABLE VARIABLE=retained_tool VALUE={tool}`
 - `OPTIMIZED_MOVE_TO_TRASH`
 - `OPTIMIZED_WAIT_BED S={bed_target} STATUS=wait_bed_temp`
-- `OPTIMIZED_WAIT_CHAMBER S={chamber_target} STATUS=wait_chamber_temp`
+- `OPTIMIZED_WAIT_CHAMBER S={chamber_target} STATUS=wait_chamber_temp MINIMUM={params.CHAMBER_MIN_TEMP|default(0)|float}`
 - `OPTIMIZED_WAIT_HOTEND S={reuse_nozzle_target} STATUS=clear_nozzle`
-- `CLEAR_OOZE`
+- `_OPTIMIZED_WIPE_NOZZLE`
 - `CLEAR_FLUSH`
 - `_OPTIMIZED_REPORT_BED_TEMP`
 - `Z_TILT_ADJUST`
@@ -294,13 +319,14 @@ Forbidden patterns:
 
 Condition: `box_enabled and retention is disabled or retained physical state is not proven`
 
-Source: `installer/klipper/tltg-optimized-macros/filament.cfg:287-330`
+Source: `installer/klipper/tltg-optimized-macros/filament.cfg:303-346`
 
 Direct visible macro calls in branch slice:
 
 - `OPTIMIZED_EXTRUSION_AND_FLUSH`
 - `OPTIMIZED_MOVE_TO_TRASH`
 - `m104`
+- `_OPTIMIZED_WIPE_NOZZLE`
 - `_OPTIMIZED_REAR_BED_SCRAPE`
 - `OPTIMIZED_WAIT_BED`
 - `OPTIMIZED_WAIT_CHAMBER`
@@ -315,8 +341,11 @@ Ordered invariants:
 - `BOX_PRINT_START EXTRUDER={tool} HOTENDTEMP={purge_temp}`
 - `OPTIMIZED_EXTRUSION_AND_FLUSH PURGETEMP={purge_temp} CHAMBER={chamber_target}`
 - `TEMPERATURE_WAIT SENSOR=extruder MAXIMUM={scrape_maximum}`
+- `_OPTIMIZED_WIPE_NOZZLE`
+- `CLEAR_FLUSH`
 - `_OPTIMIZED_REAR_BED_SCRAPE`
 - `OPTIMIZED_WAIT_BED S={bed_target} STATUS=wait_bed_temp`
+- `OPTIMIZED_WAIT_CHAMBER S={chamber_target} STATUS=wait_chamber_temp MINIMUM={params.CHAMBER_MIN_TEMP|default(0)|float}`
 - `G1 X15 Y202.5 F36000`
 - `_OPTIMIZED_REPORT_BED_TEMP`
 - `Z_TILT_ADJUST`
@@ -334,7 +363,7 @@ Forbidden patterns:
 
 Condition: `!box_available || !enable_box`
 
-Source: `installer/klipper/tltg-optimized-macros/filament.cfg:331-365`
+Source: `installer/klipper/tltg-optimized-macros/filament.cfg:347-381`
 
 Direct visible macro calls in branch slice:
 
@@ -354,6 +383,7 @@ Ordered invariants:
 - `M118 Starting without QIDI Box filament prep`
 - `OPTIMIZED_WIPE_AND_SCRAPE_NOZZLE TARGET={scrape_target}`
 - `OPTIMIZED_WAIT_BED S={bed_target} STATUS=wait_bed_temp`
+- `OPTIMIZED_WAIT_CHAMBER S={chamber_target} STATUS=wait_chamber_temp MINIMUM={params.CHAMBER_MIN_TEMP|default(0)|float}`
 - `_OPTIMIZED_REPORT_BED_TEMP`
 - `Z_TILT_ADJUST`
 - `M400`
@@ -419,6 +449,43 @@ Ordered invariants:
 Forbidden patterns:
 
 - `BED_MESH_PROFILE LOAD=`
+
+### silicone_wiper_finishing_strokes
+
+Condition: `optimized cleanup with the nozzle already at the rear wiper`
+
+Source: `installer/klipper/tltg-optimized-macros/filament.cfg:197-209`
+
+Direct visible macro calls in branch slice:
+
+- `save_gcode_state`
+- `restore_gcode_state`
+
+Ordered invariants:
+
+- `SAVE_GCODE_STATE NAME=optimized_wipe_nozzle_state`
+- `G90`
+- `M204 S10000`
+- `{% for i in range(4) %}`
+- `G1 X176 F12000`
+- `G1 X163 F12000`
+- `{% endfor %}`
+- `G1 X180 F12000`
+- `M400`
+- `SET_VELOCITY_LIMIT ACCEL={saved_accel}`
+- `RESTORE_GCODE_STATE NAME=optimized_wipe_nozzle_state`
+
+Forbidden patterns:
+
+- ` E`
+- `G1 Y`
+- `G1 Z`
+- `G4 `
+- `M104`
+- `M109`
+- `CLEAR_NOZZLE`
+- `CLEAR_OOZE`
+- `_OPTIMIZED_REAR_BED_SCRAPE`
 
 ### rear_bed_scrape_motion
 
