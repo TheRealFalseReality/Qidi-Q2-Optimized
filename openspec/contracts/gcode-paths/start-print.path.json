@@ -246,7 +246,7 @@
         "OPTIMIZED_WAIT_BED S={bed_target} STATUS=wait_bed_temp",
         "OPTIMIZED_WAIT_CHAMBER S={chamber_target} STATUS=wait_chamber_temp MINIMUM={params.CHAMBER_MIN_TEMP|default(0)|float}",
         "OPTIMIZED_WAIT_HOTEND S={reuse_nozzle_target} STATUS=clear_nozzle",
-        "CLEAR_OOZE",
+        "_OPTIMIZED_WIPE_NOZZLE",
         "CLEAR_FLUSH",
         "_OPTIMIZED_REPORT_BED_TEMP",
         "Z_TILT_ADJUST",
@@ -275,6 +275,8 @@
         "BOX_PRINT_START EXTRUDER={tool} HOTENDTEMP={purge_temp}",
         "OPTIMIZED_EXTRUSION_AND_FLUSH PURGETEMP={purge_temp} CHAMBER={chamber_target}",
         "TEMPERATURE_WAIT SENSOR=extruder MAXIMUM={scrape_maximum}",
+        "_OPTIMIZED_WIPE_NOZZLE",
+        "CLEAR_FLUSH",
         "_OPTIMIZED_REAR_BED_SCRAPE",
         "OPTIMIZED_WAIT_BED S={bed_target} STATUS=wait_bed_temp",
         "OPTIMIZED_WAIT_CHAMBER S={chamber_target} STATUS=wait_chamber_temp MINIMUM={params.CHAMBER_MIN_TEMP|default(0)|float}",
@@ -358,6 +360,38 @@
       ],
       "must_not_include": [
         "BED_MESH_PROFILE LOAD="
+      ]
+    },
+    {
+      "name": "silicone_wiper_finishing_strokes",
+      "source_macro": "_OPTIMIZED_WIPE_NOZZLE",
+      "condition": "optimized cleanup with the nozzle already at the rear wiper",
+      "slice": {
+        "start": "{% set saved_accel = printer.toolhead.max_accel|float %}"
+      },
+      "must_include_order": [
+        "SAVE_GCODE_STATE NAME=optimized_wipe_nozzle_state",
+        "G90",
+        "M204 S10000",
+        "{% for i in range(4) %}",
+        "G1 X176 F12000",
+        "G1 X163 F12000",
+        "{% endfor %}",
+        "G1 X180 F12000",
+        "M400",
+        "SET_VELOCITY_LIMIT ACCEL={saved_accel}",
+        "RESTORE_GCODE_STATE NAME=optimized_wipe_nozzle_state"
+      ],
+      "must_not_include": [
+        " E",
+        "G1 Y",
+        "G1 Z",
+        "G4 ",
+        "M104",
+        "M109",
+        "CLEAR_NOZZLE",
+        "CLEAR_OOZE",
+        "_OPTIMIZED_REAR_BED_SCRAPE"
       ]
     },
     {

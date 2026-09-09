@@ -1,5 +1,8 @@
 # Changelog
 
+## 26.09.09.2
+- Optimized silicone-wiper cleanup uses four back-and-forth finishing passes at 200 mm/s without adding extrusion or bed scraping. Existing purge quantities, temperature waits, and slicer filament-change wiping remain unchanged.
+
 ## 26.09.09.1
 - Added OrcaSlicer 2.4.2+ filament-profile minimum chamber temperature support so leveling and printing can begin at the minimum while heating continues toward the target, including staggered startup heating.
 - Preserved existing chamber waits for zero or omitted minimums, QIDI Studio, and independent slicer-profile or optimized-macro updates.

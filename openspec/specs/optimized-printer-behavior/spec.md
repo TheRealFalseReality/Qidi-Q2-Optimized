@@ -166,6 +166,14 @@ Optimized cut, purge, cooldown, cleaning, calibration, and cancellation helpers 
 - **AND** optional Box objects are called only when available and valid
 - **AND** fixed waits are reduced without replacing required motion completion waits
 
+#### Scenario: Optimized cleanup uses fast non-extruding silicone wipes
+- **WHEN** optimized print-start, purge cleanup, unload cleanup, or staged end cleanup reaches a silicone-wiper pass
+- **THEN** the already-positioned nozzle performs four back-and-forth finishing passes at a commanded 200 mm/s and exits toward the chute
+- **AND** the wipe helper preserves caller motion and extrusion modes, feed settings, and acceleration
+- **AND** the helper performs no extrusion, Y/Z repositioning, heater changes, fixed dwell, or bed scraping
+- **AND** existing purge quantities, temperature gates, optional-hardware guards, and separate rear-bed scraping remain unchanged
+- **AND** vendor cleanup commands and slicer filament-change sequences remain unchanged
+
 #### Scenario: End-print performs staged cooldown safely
 - **WHEN** normal slicer end G-code runs
 - **THEN** the toolhead reaches the chute, filament preparation and heater shutdown occur, and staged cooling and wiping complete before print end

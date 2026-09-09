@@ -474,10 +474,10 @@ class OptimizedMacroContractTests(unittest.TestCase):
         self.assert_ordered(
             staged_wipe,
             "TEMPERATURE_WAIT SENSOR={extruder} MAXIMUM={first_wipe_temp}",
-            "CLEAR_OOZE",
+            "_OPTIMIZED_WIPE_NOZZLE",
             "CLEAR_FLUSH",
             "TEMPERATURE_WAIT SENSOR={extruder} MAXIMUM={final_wipe_temp}",
-            "CLEAR_OOZE",
+            "_OPTIMIZED_WIPE_NOZZLE",
             "CLEAR_FLUSH",
             "G1 Y-{pull_forward_y} F6000",
         )
@@ -504,7 +504,7 @@ class OptimizedMacroContractTests(unittest.TestCase):
             "OPTIMIZED_WAIT_BED S={bed_target} STATUS=wait_bed_temp",
             "OPTIMIZED_WAIT_CHAMBER S={chamber_target} STATUS=wait_chamber_temp MINIMUM={params.CHAMBER_MIN_TEMP|default(0)|float}",
             "OPTIMIZED_WAIT_HOTEND S={reuse_nozzle_target} STATUS=clear_nozzle",
-            "CLEAR_OOZE",
+            "_OPTIMIZED_WIPE_NOZZLE",
             "CLEAR_FLUSH",
             "Z_TILT_ADJUST",
         )
@@ -580,6 +580,7 @@ class OptimizedMacroContractTests(unittest.TestCase):
         self.assertNotIn("_OPTIMIZED_HOME_Z_FROM_SAFE_POINT", wipe_gcode)
         self.assertNotIn("_OPTIMIZED_HOME_Z_FROM_SAFE_POINT_RAW", wipe_gcode)
         self.assertIn("OPTIMIZED_WAIT_HOTEND S={scrape_target} STATUS=clear_nozzle", wipe_gcode)
+        self.assertIn("_OPTIMIZED_WIPE_NOZZLE", wipe_gcode)
         self.assertIn("_OPTIMIZED_REAR_BED_SCRAPE", wipe_gcode)
         self.assertNotIn("G1 Z-0.2 F480", wipe_gcode)
 

@@ -252,7 +252,7 @@ Forbidden patterns:
 
 Condition: `all optimized starts`
 
-Source: `installer/klipper/tltg-optimized-macros/filament.cfg:217-248`
+Source: `installer/klipper/tltg-optimized-macros/filament.cfg:233-264`
 
 Direct visible macro calls in branch slice:
 
@@ -274,7 +274,7 @@ Forbidden patterns:
 
 Condition: `tltg_keep_loaded_between_prints == 1 and retained physical state is proven`
 
-Source: `installer/klipper/tltg-optimized-macros/filament.cfg:249-286`
+Source: `installer/klipper/tltg-optimized-macros/filament.cfg:265-302`
 
 Direct visible macro calls in branch slice:
 
@@ -286,6 +286,7 @@ Direct visible macro calls in branch slice:
 - `OPTIMIZED_WAIT_CHAMBER`
 - `OPTIMIZED_WAIT_HOTEND`
 - `M106`
+- `_OPTIMIZED_WIPE_NOZZLE`
 - `_OPTIMIZED_REPORT_BED_TEMP`
 - `_OPTIMIZED_PREPARE_PRINT_MESH`
 - `M1002`
@@ -298,7 +299,7 @@ Ordered invariants:
 - `OPTIMIZED_WAIT_BED S={bed_target} STATUS=wait_bed_temp`
 - `OPTIMIZED_WAIT_CHAMBER S={chamber_target} STATUS=wait_chamber_temp MINIMUM={params.CHAMBER_MIN_TEMP|default(0)|float}`
 - `OPTIMIZED_WAIT_HOTEND S={reuse_nozzle_target} STATUS=clear_nozzle`
-- `CLEAR_OOZE`
+- `_OPTIMIZED_WIPE_NOZZLE`
 - `CLEAR_FLUSH`
 - `_OPTIMIZED_REPORT_BED_TEMP`
 - `Z_TILT_ADJUST`
@@ -318,13 +319,14 @@ Forbidden patterns:
 
 Condition: `box_enabled and retention is disabled or retained physical state is not proven`
 
-Source: `installer/klipper/tltg-optimized-macros/filament.cfg:287-330`
+Source: `installer/klipper/tltg-optimized-macros/filament.cfg:303-346`
 
 Direct visible macro calls in branch slice:
 
 - `OPTIMIZED_EXTRUSION_AND_FLUSH`
 - `OPTIMIZED_MOVE_TO_TRASH`
 - `m104`
+- `_OPTIMIZED_WIPE_NOZZLE`
 - `_OPTIMIZED_REAR_BED_SCRAPE`
 - `OPTIMIZED_WAIT_BED`
 - `OPTIMIZED_WAIT_CHAMBER`
@@ -339,6 +341,8 @@ Ordered invariants:
 - `BOX_PRINT_START EXTRUDER={tool} HOTENDTEMP={purge_temp}`
 - `OPTIMIZED_EXTRUSION_AND_FLUSH PURGETEMP={purge_temp} CHAMBER={chamber_target}`
 - `TEMPERATURE_WAIT SENSOR=extruder MAXIMUM={scrape_maximum}`
+- `_OPTIMIZED_WIPE_NOZZLE`
+- `CLEAR_FLUSH`
 - `_OPTIMIZED_REAR_BED_SCRAPE`
 - `OPTIMIZED_WAIT_BED S={bed_target} STATUS=wait_bed_temp`
 - `OPTIMIZED_WAIT_CHAMBER S={chamber_target} STATUS=wait_chamber_temp MINIMUM={params.CHAMBER_MIN_TEMP|default(0)|float}`
@@ -359,7 +363,7 @@ Forbidden patterns:
 
 Condition: `!box_available || !enable_box`
 
-Source: `installer/klipper/tltg-optimized-macros/filament.cfg:331-365`
+Source: `installer/klipper/tltg-optimized-macros/filament.cfg:347-381`
 
 Direct visible macro calls in branch slice:
 
@@ -445,6 +449,43 @@ Ordered invariants:
 Forbidden patterns:
 
 - `BED_MESH_PROFILE LOAD=`
+
+### silicone_wiper_finishing_strokes
+
+Condition: `optimized cleanup with the nozzle already at the rear wiper`
+
+Source: `installer/klipper/tltg-optimized-macros/filament.cfg:197-209`
+
+Direct visible macro calls in branch slice:
+
+- `save_gcode_state`
+- `restore_gcode_state`
+
+Ordered invariants:
+
+- `SAVE_GCODE_STATE NAME=optimized_wipe_nozzle_state`
+- `G90`
+- `M204 S10000`
+- `{% for i in range(4) %}`
+- `G1 X176 F12000`
+- `G1 X163 F12000`
+- `{% endfor %}`
+- `G1 X180 F12000`
+- `M400`
+- `SET_VELOCITY_LIMIT ACCEL={saved_accel}`
+- `RESTORE_GCODE_STATE NAME=optimized_wipe_nozzle_state`
+
+Forbidden patterns:
+
+- ` E`
+- `G1 Y`
+- `G1 Z`
+- `G4 `
+- `M104`
+- `M109`
+- `CLEAR_NOZZLE`
+- `CLEAR_OOZE`
+- `_OPTIMIZED_REAR_BED_SCRAPE`
 
 ### rear_bed_scrape_motion
 
