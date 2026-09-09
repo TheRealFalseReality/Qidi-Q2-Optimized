@@ -274,7 +274,7 @@ class OptimizedMacroContractTests(unittest.TestCase):
 
     def test_slicer_start_keeps_mesh_selection_printer_side(self):
         expected_calls = {
-            "orcaslicer_gcode/start.gcode": "OPTIMIZED_START_PRINT_FILAMENT_PREP EXTRUDER=[initial_no_support_extruder] FIRSTLAYERTEMP=[nozzle_temperature_initial_layer] PURGETEMP={nozzle_temperature_range_high[initial_tool]} BEDTEMP=[bed_temperature_initial_layer_single] CHAMBER=[chamber_temperature]",
+            "orcaslicer_gcode/start.gcode": "OPTIMIZED_START_PRINT_FILAMENT_PREP EXTRUDER=[initial_no_support_extruder] FIRSTLAYERTEMP=[nozzle_temperature_initial_layer] PURGETEMP={nozzle_temperature_range_high[initial_tool]} BEDTEMP=[bed_temperature_initial_layer_single] CHAMBER=[chamber_temperature] CHAMBER_MIN_TEMP={chamber_minimal_temperature[initial_tool]}",
             "qidistudio_gcode/start.gcode": "OPTIMIZED_START_PRINT_FILAMENT_PREP EXTRUDER=[initial_no_support_extruder] FIRSTLAYERTEMP=[nozzle_temperature_initial_layer] PURGETEMP={nozzle_temperature_range_high[initial_tool]} BEDTEMP=[bed_temperature_initial_layer_single] CHAMBER=[chamber_temperatures]",
         }
         for relative_path, expected_call in expected_calls.items():
@@ -502,7 +502,7 @@ class OptimizedMacroContractTests(unittest.TestCase):
             "G1 Z20 F480",
             "OPTIMIZED_MOVE_TO_TRASH",
             "OPTIMIZED_WAIT_BED S={bed_target} STATUS=wait_bed_temp",
-            "OPTIMIZED_WAIT_CHAMBER S={chamber_target} STATUS=wait_chamber_temp",
+            "OPTIMIZED_WAIT_CHAMBER S={chamber_target} STATUS=wait_chamber_temp MINIMUM={params.CHAMBER_MIN_TEMP|default(0)|float}",
             "OPTIMIZED_WAIT_HOTEND S={reuse_nozzle_target} STATUS=clear_nozzle",
             "CLEAR_OOZE",
             "CLEAR_FLUSH",
@@ -521,12 +521,6 @@ class OptimizedMacroContractTests(unittest.TestCase):
         self.assertEqual(start_gcode.count("Z_TILT_ADJUST"), 3)
         for branch in start_gcode.split("Z_TILT_ADJUST")[:-1]:
             self.assertTrue(branch.rstrip().endswith("_OPTIMIZED_REPORT_BED_TEMP"))
-
-    def test_chamber_wait_accepts_three_degree_startup_window(self):
-        chamber_gcode = self._macro_gcode("OPTIMIZED_WAIT_CHAMBER")
-        self.assertIn('TEMPERATURE_WAIT SENSOR="heater_generic chamber" MINIMUM={([target - 3, 0]|max)}', chamber_gcode)
-        self.assertNotIn("target, 65", chamber_gcode)
-
 
     def test_rear_bed_scrape_orients_cable_chain_and_uses_stock_coordinates(self):
         globals_text = (OPTIMIZED_MACRO_ROOT / "globals.cfg").read_text(encoding="utf-8")

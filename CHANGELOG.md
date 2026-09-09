@@ -1,5 +1,9 @@
 # Changelog
 
+## 26.09.09.1
+- Added OrcaSlicer 2.4.2+ filament-profile minimum chamber temperature support so leveling and printing can begin at the minimum while heating continues toward the target, including staggered startup heating.
+- Preserved existing chamber waits for zero or omitted minimums, QIDI Studio, and independent slicer-profile or optimized-macro updates.
+
 ## 26.08.29.1
 - Restored the stock QIDI Y395–Y397 rear-bed nozzle scrape footprint after the cable-chain orientation traverse.
 - Prevented intentional end-of-print QIDI Box unloading from triggering a filament-runout pause before heater shutdown, bed lowering, nozzle wiping, and final print cleanup.

@@ -14,8 +14,8 @@ Ordered invariants:
 - `SET_PRINT_MAIN_STATUS MAIN_STATUS=print_start`
 - `M1002 R1`
 - `G29.0`
-- `OPTIMIZED_PRINT_START_HOME BEDTEMP=[bed_temperature_initial_layer_single] CHAMBER=[chamber_temperature]`
-- `OPTIMIZED_START_PRINT_FILAMENT_PREP EXTRUDER=[initial_no_support_extruder] FIRSTLAYERTEMP=[nozzle_temperature_initial_layer] PURGETEMP={nozzle_temperature_range_high[initial_tool]} BEDTEMP=[bed_temperature_initial_layer_single] CHAMBER=[chamber_temperature]`
+- `OPTIMIZED_PRINT_START_HOME BEDTEMP=[bed_temperature_initial_layer_single] CHAMBER=[chamber_temperature] CHAMBER_MIN_TEMP={chamber_minimal_temperature[initial_tool]}`
+- `OPTIMIZED_START_PRINT_FILAMENT_PREP EXTRUDER=[initial_no_support_extruder] FIRSTLAYERTEMP=[nozzle_temperature_initial_layer] PURGETEMP={nozzle_temperature_range_high[initial_tool]} BEDTEMP=[bed_temperature_initial_layer_single] CHAMBER=[chamber_temperature] CHAMBER_MIN_TEMP={chamber_minimal_temperature[initial_tool]}`
 - `T[initial_tool]`
 - `G90`
 - `G1 Z10 F600`
@@ -119,7 +119,7 @@ Direct visible macro calls in branch slice:
 
 Ordered invariants:
 
-- `_OPTIMIZED_STAGGERED_START_EXPLICIT BEDTEMP={bed_target} CHAMBER={chamber_target} PROBETEMP={probe_target} DWELL={dwell_seconds}`
+- `_OPTIMIZED_STAGGERED_START_EXPLICIT BEDTEMP={bed_target} CHAMBER={chamber_target} PROBETEMP={probe_target} DWELL={dwell_seconds} CHAMBER_MIN_TEMP={params.CHAMBER_MIN_TEMP|default(0)|float}`
 
 Forbidden patterns:
 
@@ -187,7 +187,7 @@ Ordered invariants:
 - `SET_HEATER_TEMPERATURE HEATER=chamber TARGET=0`
 - `OPTIMIZED_WAIT_BED S={bed_target}`
 - `G4 P{dwell_ms}`
-- `OPTIMIZED_WAIT_CHAMBER S={chamber_target}`
+- `OPTIMIZED_WAIT_CHAMBER S={chamber_target} MINIMUM={params.CHAMBER_MIN_TEMP|default(0)|float}`
 - `G4 P{dwell_ms}`
 - `M104 S{probe_target}`
 
@@ -223,6 +223,30 @@ Forbidden patterns:
 - `OPTIMIZED_WAIT_BED`
 - `OPTIMIZED_WAIT_CHAMBER`
 - `G28`
+
+### chamber_start_wait_threshold
+
+Condition: `chamber heater available; positive minimum selects exact threshold, otherwise target minus 3 degrees`
+
+Source: `installer/klipper/tltg-optimized-macros/heaters.cfg:26-42`
+
+Direct visible macro calls in branch slice:
+
+- `set_heater_temperature_scaled`
+
+Ordered invariants:
+
+- `{% set target = params.S|default(0)|float %}`
+- `{% set minimum = params.MINIMUM|default(0)|float %}`
+- `{% set wait_target = ([minimum, target]|min) if minimum > 0 else ([target - 3, 0]|max) %}`
+- `{% if target > 0.0 %}`
+- `SET_HEATER_TEMPERATURE_SCALED HEATER=chamber TARGET={target}`
+- `TEMPERATURE_WAIT SENSOR="heater_generic chamber" MINIMUM={wait_target}`
+
+Forbidden patterns:
+
+- `TARGET={wait_target}`
+- `SAVE_VARIABLE`
 
 ### tool_mapping_reconciliation
 
@@ -272,7 +296,7 @@ Ordered invariants:
 - `SAVE_VARIABLE VARIABLE=retained_tool VALUE={tool}`
 - `OPTIMIZED_MOVE_TO_TRASH`
 - `OPTIMIZED_WAIT_BED S={bed_target} STATUS=wait_bed_temp`
-- `OPTIMIZED_WAIT_CHAMBER S={chamber_target} STATUS=wait_chamber_temp`
+- `OPTIMIZED_WAIT_CHAMBER S={chamber_target} STATUS=wait_chamber_temp MINIMUM={params.CHAMBER_MIN_TEMP|default(0)|float}`
 - `OPTIMIZED_WAIT_HOTEND S={reuse_nozzle_target} STATUS=clear_nozzle`
 - `CLEAR_OOZE`
 - `CLEAR_FLUSH`
@@ -317,6 +341,7 @@ Ordered invariants:
 - `TEMPERATURE_WAIT SENSOR=extruder MAXIMUM={scrape_maximum}`
 - `_OPTIMIZED_REAR_BED_SCRAPE`
 - `OPTIMIZED_WAIT_BED S={bed_target} STATUS=wait_bed_temp`
+- `OPTIMIZED_WAIT_CHAMBER S={chamber_target} STATUS=wait_chamber_temp MINIMUM={params.CHAMBER_MIN_TEMP|default(0)|float}`
 - `G1 X15 Y202.5 F36000`
 - `_OPTIMIZED_REPORT_BED_TEMP`
 - `Z_TILT_ADJUST`
@@ -354,6 +379,7 @@ Ordered invariants:
 - `M118 Starting without QIDI Box filament prep`
 - `OPTIMIZED_WIPE_AND_SCRAPE_NOZZLE TARGET={scrape_target}`
 - `OPTIMIZED_WAIT_BED S={bed_target} STATUS=wait_bed_temp`
+- `OPTIMIZED_WAIT_CHAMBER S={chamber_target} STATUS=wait_chamber_temp MINIMUM={params.CHAMBER_MIN_TEMP|default(0)|float}`
 - `_OPTIMIZED_REPORT_BED_TEMP`
 - `Z_TILT_ADJUST`
 - `M400`

@@ -100,6 +100,14 @@ SAVE_VARIABLE VARIABLE=tltg_start_bed_mesh_profile VALUE='""'
 
 The setting applies to existing sliced files and requires no change to slicer gcode. The console reports whether start preparation is loading the named profile or calibrating a fresh adaptive mesh. A configured profile must already exist; Klipper stops print preparation if it cannot load the name.
 
+### Minimum chamber temperature
+
+With OrcaSlicer 2.4.2 or later, use the updated `orcaslicer_gcode/start.gcode` and set the filament profile's chamber **Target** and **Minimal** temperatures. For example, Target `60°C` and Minimal `50°C` allow leveling and printing once the chamber reaches `50°C`, while heating continues toward `60°C`. The initial tool's filament supplies the minimum; values above the target are capped at the target.
+
+Minimal `0` keeps the existing target-minus-3°C wait. Older start G-code and QIDI Studio retain that behavior with updated macros; updated Orca start G-code also works with older optimized macros, which ignore the minimum and retain their existing wait. Both the start G-code and optimized macros must be updated to use the shorter wait.
+
+The minimum also applies to the chamber stage of staggered heating. A lower minimum allows nozzle heating to begin while the chamber is still heating toward its target.
+
 ### Staggered print-start heating
 
 Staggered heating is disabled by default. Enable bed, chamber, then nozzle warm-up with a 10-second dwell between active stages:
