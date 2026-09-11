@@ -1,4 +1,4 @@
-![Tuba Makes](.github/images/tuba-makes-logo.svg)
+![Tuba Makes](.github/images/tuba-makes-logo.png)
 
 # Qidi Max 4 Optimized
 
