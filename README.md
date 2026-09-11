@@ -1,3 +1,7 @@
+<p align="center">
+  <img src=".github/images/tuba-makes-logo.svg" alt="Tuba Makes" width="480">
+</p>
+
 # Qidi Max 4 Optimized
 
 Opinionated and Optimized Klipper macros and slicer machine GCode for the QIDI Max 4.
