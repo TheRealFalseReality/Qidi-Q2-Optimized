@@ -1,6 +1,4 @@
-<p align="center">
-  <img src=".github/images/tuba-makes-logo.svg" alt="Tuba Makes" width="480">
-</p>
+![Tuba Makes](.github/images/tuba-makes-logo.svg)
 
 # Qidi Max 4 Optimized
 
