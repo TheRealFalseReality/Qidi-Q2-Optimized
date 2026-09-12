@@ -112,6 +112,14 @@ class SourcePatchLifecycleMatrixTests(unittest.TestCase):
                 value,
             )
 
+    def _assert_homing_retract_speed(self, printer_root: Path, value: str) -> None:
+        text = (printer_root / "config/printer.cfg").read_text(encoding="utf-8")
+        for stepper in ("stepper_x", "stepper_y"):
+            self.assertEqual(
+                klipper_cfg.resolve_unique_option(text, stepper, "homing_retract_speed").value,
+                value,
+            )
+
     def test_fresh_stock_install_applies_source_and_records_preimage_for_all_variants(self):
         for firmware, source_variant, desired_sha256 in SOURCE_CASES:
             with self.subTest(firmware=firmware, source_variant=source_variant):
@@ -120,7 +128,8 @@ class SourcePatchLifecycleMatrixTests(unittest.TestCase):
                 )
                 self._run_install(paths)
 
-                self._assert_homing_speed(printer_root, "100")
+                self._assert_homing_speed(printer_root, "65")
+                self._assert_homing_retract_speed(printer_root, "500.0")
                 self.assertEqual(
                     hashlib.sha256(
                         (paths.managed_klipper_root / "klippy/extras/homing.py").read_bytes()
@@ -197,7 +206,7 @@ class SourcePatchLifecycleMatrixTests(unittest.TestCase):
             ),
         )
 
-    def test_2606151_upgrade_migrates_65_and_adds_source_ledger_for_all_variants(self):
+    def test_prior_managed_homing_values_migrate_for_all_variants(self):
         for firmware, source_variant, _ in SOURCE_CASES:
             with self.subTest(firmware=firmware, source_variant=source_variant):
                 printer_root, paths, stock_source = self._fixture(
@@ -205,9 +214,9 @@ class SourcePatchLifecycleMatrixTests(unittest.TestCase):
                 )
                 cfg = printer_root / "config/printer.cfg"
                 cfg.write_text(
-                    cfg.read_text(encoding="utf-8").replace(
-                        "homing_speed: 50", "homing_speed: 65"
-                    ),
+                    cfg.read_text(encoding="utf-8")
+                    .replace("homing_speed: 50", "homing_speed: 100")
+                    .replace("homing_retract_speed: 200.0", "homing_retract_speed: 1000.0"),
                     encoding="utf-8",
                 )
                 write_installed_state(
@@ -215,9 +224,9 @@ class SourcePatchLifecycleMatrixTests(unittest.TestCase):
                     InstalledState(
                         schema_version=1,
                         package_id="qidi-max4-optimized",
-                        package_version="26.06.15.1",
+                        package_version=self.manifest.package.version,
                         runtime_firmware=firmware,
-                        backup_label="legacy-26.06.15.1",
+                        backup_label="prior-install",
                         installed_at="2026-06-15T00:00:00Z",
                         managed_tree=ManagedTreeState(
                             "config/tltg-optimized-macros", ()
@@ -229,7 +238,7 @@ class SourcePatchLifecycleMatrixTests(unittest.TestCase):
                                 "stepper_x",
                                 "homing_speed",
                                 "50",
-                                "65",
+                                "100",
                                 "applied",
                             ),
                             PatchLedgerEntry(
@@ -238,7 +247,25 @@ class SourcePatchLifecycleMatrixTests(unittest.TestCase):
                                 "stepper_y",
                                 "homing_speed",
                                 "50",
-                                "65",
+                                "100",
+                                "applied",
+                            ),
+                            PatchLedgerEntry(
+                                "stepper_x_homing_retract_speed",
+                                "config/printer.cfg",
+                                "stepper_x",
+                                "homing_retract_speed",
+                                "200.0",
+                                "1000.0",
+                                "applied",
+                            ),
+                            PatchLedgerEntry(
+                                "stepper_y_homing_retract_speed",
+                                "config/printer.cfg",
+                                "stepper_y",
+                                "homing_retract_speed",
+                                "200.0",
+                                "1000.0",
                                 "applied",
                             ),
                         ),
@@ -247,7 +274,8 @@ class SourcePatchLifecycleMatrixTests(unittest.TestCase):
 
                 self._run_install(paths)
 
-                self._assert_homing_speed(printer_root, "100")
+                self._assert_homing_speed(printer_root, "65")
+                self._assert_homing_retract_speed(printer_root, "500.0")
                 state = load_installed_state(
                     printer_root / "config/tltg_optimized_state.yaml"
                 )
@@ -258,7 +286,7 @@ class SourcePatchLifecycleMatrixTests(unittest.TestCase):
                     in {"stepper_x_homing_speed", "stepper_y_homing_speed"}
                 }
                 self.assertEqual({entry.expected for entry in speeds.values()}, {"50"})
-                self.assertEqual({entry.desired for entry in speeds.values()}, {"100"})
+                self.assertEqual({entry.desired for entry in speeds.values()}, {"65"})
                 self.assertEqual(state.source_patches[0].original_bytes, stock_source)
 
     def test_auto_update_child_initializes_defaults_and_advances_checksum_for_all_variants(self):
