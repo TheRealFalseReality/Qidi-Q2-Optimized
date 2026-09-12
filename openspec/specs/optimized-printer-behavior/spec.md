@@ -205,6 +205,14 @@ Optimized configuration SHALL preserve firmware-scoped peripheral ownership, sto
 - **AND** fan output, RPM reporting, and zero-RPM shutdown behavior remain unchanged
 - **AND** uninstall restores the owned firmware preimage while preserving user drift
 
+#### Scenario: Electronics temperatures are exposed without modifying Fluidd
+- **WHEN** optimized configuration is installed
+- **THEN** Moonraker and Fluidd receive temperature sensors named `AP_Board_SOC`, `Toolhead_MCU`, and `Mainboard_MCU`
+- **AND** the AP-board sensor reads the Linux SoC thermal zone
+- **AND** the toolhead sensor reads the THR MCU internal sensor
+- **AND** the confirmed GD32F425 mainboard uses the datasheet's uncalibrated typical conversion instead of Klipper's incompatible STM32F407 calibration path
+- **AND** the approximate mainboard sensor is observational and uses broad bounds so normal readings do not trigger a machine shutdown
+
 #### Scenario: Stock integration surfaces remain intact
 - **WHEN** optimized configuration is installed
 - **THEN** stock-named macros required by QIDI software remain available

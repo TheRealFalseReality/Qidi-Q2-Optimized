@@ -16,6 +16,29 @@ class OptimizedMacroContractTests(unittest.TestCase):
         if duplicates:
             self.fail("Optimized macro duplicate definitions are invalid for this test.")
 
+    def test_electronics_temperatures_are_exposed_with_gd32_mainboard_conversion(self):
+        temperatures = (OPTIMIZED_MACRO_ROOT / "temperatures.cfg").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("[temperature_sensor AP_Board_SOC]", temperatures)
+        self.assertIn("sensor_type: temperature_host", temperatures)
+        self.assertIn(
+            "sensor_path: /sys/class/thermal/thermal_zone0/temp", temperatures
+        )
+        self.assertIn("[temperature_sensor Toolhead_MCU]", temperatures)
+        self.assertIn("sensor_type: temperature_mcu", temperatures)
+        self.assertIn("sensor_mcu: THR", temperatures)
+        self.assertIn("[adc_temperature GD32F425]", temperatures)
+        self.assertIn("temperature1: 0\nvoltage1: 1.5100", temperatures)
+        self.assertIn("temperature2: 100\nvoltage2: 1.0700", temperatures)
+        self.assertIn("[temperature_sensor Mainboard_MCU]", temperatures)
+        self.assertIn("sensor_type: GD32F425", temperatures)
+        self.assertIn("sensor_pin: ADC_TEMPERATURE", temperatures)
+        self.assertIn("min_temp: -100\nmax_temp: 500", temperatures)
+        self.assertNotIn("sensor_mcu: mcu", temperatures)
+        self.assertNotIn("[temperature_sensor Mainboard_GD32F425]", temperatures)
+        self.assertNotIn("[temperature_sensor Mainboard_MCU_Approx]", temperatures)
+
     def test_user_helper_macros_are_available(self):
         helpers = (OPTIMIZED_MACRO_ROOT / "helpers.cfg").read_text(encoding="utf-8")
         self.assertIn("[screws_tilt_adjust]", helpers)
