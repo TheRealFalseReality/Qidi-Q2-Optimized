@@ -1,6 +1,7 @@
 # Changelog
 
 ## 26.09.09.1
+- Reduced the X and Y first-pass homing speed from 100 mm/s to 65 mm/s and the homing retraction speed from 1,000 mm/s to 500 mm/s; retained the existing 55 mm/s second pass.
 - Optimized silicone-wiper cleanup uses four back-and-forth finishing passes at 200 mm/s without adding extrusion or bed scraping. Existing purge quantities, temperature waits, and slicer filament-change wiping remain unchanged.
 - Added OrcaSlicer 2.4.2+ filament-profile minimum chamber temperature support so leveling and printing can begin at the minimum while heating continues toward the target, including staggered startup heating.
 - Preserved existing chamber waits for zero or omitted minimums, QIDI Studio, and independent slicer-profile or optimized-macro updates.
