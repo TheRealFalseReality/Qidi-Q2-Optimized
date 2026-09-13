@@ -30,6 +30,7 @@ from installer.runtime.auto_update import (
 from installer.runtime.backup import load_backup_snapshot, snapshot_runtime_tree
 from installer.runtime.cli import resolve_runtime_paths
 from installer.runtime.compatibility import load_supported_upgrade_sources
+from installer.runtime.errors import ActivePrintError, PrinterStateError
 from installer.runtime.manifest import load_manifest
 from installer.runtime.models import (
     InstalledState,
@@ -1004,6 +1005,60 @@ class SourcePatchLifecycleMatrixTests(unittest.TestCase):
                 self.assertFalse(
                     (printer_root / "config/tltg_optimized_state.yaml").exists()
                 )
+
+    def test_restore_rejects_non_idle_printer_after_confirmation_without_replacement(self):
+        printer_root, paths, _ = self._fixture("01.01.06.03")
+        install = self._run_install(paths)
+        assert install.backup_zip_path is not None
+        printer_config = printer_root / "config/printer.cfg"
+        printer_config.write_text("[printer]\nmodified: yes\n", encoding="utf-8")
+        before = printer_config.read_bytes()
+
+        for state in ("printing", "paused", None):
+            with self.subTest(state=state):
+                with self.assertRaises((ActivePrintError, PrinterStateError)):
+                    run_restore_helper(
+                        paths,
+                        self.manifest,
+                        stream=io.StringIO(),
+                        input_stream=io.StringIO("RESTORE\n"),
+                        backup_path=str(install.backup_zip_path),
+                        urlopen=moonraker_urlopen(state),
+                    )
+                self.assertEqual(printer_config.read_bytes(), before)
+
+    def test_interrupt_after_configuration_write_rolls_back_and_preserves_live_saved_variables(self):
+        printer_root, paths, _ = self._fixture("01.01.06.03")
+        saved_variables_path = printer_root / "config/saved_variables.cfg"
+        saved_before = saved_variables_path.read_bytes()
+        printer_before = (printer_root / "config/printer.cfg").read_bytes()
+
+        with mock.patch(
+            "installer.runtime.runner.mirror_tree", side_effect=KeyboardInterrupt
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                self._run_install(paths)
+
+        self.assertEqual((printer_root / "config/printer.cfg").read_bytes(), printer_before)
+        self.assertNotEqual(saved_variables_path.read_bytes(), saved_before)
+        self.assertIn(
+            b"tltg_keep_loaded_between_prints = 1", saved_variables_path.read_bytes()
+        )
+        self.assertFalse(paths.restart_marker_path.exists())
+        self.assertFalse((printer_root / "config/tltg_optimized_state.yaml").exists())
+
+    def test_interrupt_after_configuration_commit_preserves_committed_state(self):
+        printer_root, paths, _ = self._fixture("01.01.06.03")
+        with mock.patch(
+            "installer.runtime.runner.maybe_apply_system_optimizations",
+            side_effect=KeyboardInterrupt,
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                self._run_install(paths)
+
+        self.assertTrue((printer_root / "config/tltg_optimized_state.yaml").exists())
+        self._assert_homing_speed(printer_root, "65")
+        self.assertTrue(paths.restart_marker_path.exists())
 
     def test_source_inclusive_restore_restores_stock_source_for_all_variants(self):
         for firmware, source_variant, _ in SOURCE_CASES:

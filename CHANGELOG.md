@@ -1,10 +1,12 @@
 # Changelog
 
-## 26.09.09.2
+## 26.09.09.1
+- Consolidated installer upgrade admission into a validated cumulative ownership and source-provenance envelope while retaining explicit historical package-version support and direct upgrades.
+- Made install, uninstall, and restore configuration changes use recoverable transaction planning, stale-preimage rejection, idle restore admission, and interruption compensation without restoring Moonraker saved-variable files.
+- Kept integrated host optimizations in the installer flow while recording bounded policy, first restoration preimages, latest outcomes, and Rockchip recovery evidence. Host restore now preserves user-modified state instead of overwriting it.
+- Moved host service and mount simulation into test fixtures, shared semantic installer summaries between plain and Rich output, and moved command aliases, help, version reporting, and validation into Python-backed launchers.
 - Fixed a `NameError` during idle QIDI Box topology reconciliation so automatic-update checks can initialize missing tool-slot mappings after the Box count changes while preserving custom mappings.
 - Persisted installer defaults through Klipper's live Moonraker `SAVE_VARIABLE` path instead of replacing a stale `saved_variables.cfg` snapshot. Updates and already-current enrolled auto-update checks repair only missing defaults; existing retention values and non-empty custom QIDI Box tool-slot mappings stay unchanged. A source-restart verification mismatch retains the exact authorized expectations and blocks later installer or updater work until Klipper confirms them; dry-runs retain that evidence and successful uninstall removes it. Moonraker does not provide compare-and-set semantics, so a concurrent update after the final live eligibility check can still win.
-
-## 26.09.09.1
 - Reduced the X and Y first-pass homing speed from 100 mm/s to 65 mm/s and the homing retraction speed from 1,000 mm/s to 500 mm/s; retained the existing 55 mm/s second pass.
 - Optimized silicone-wiper cleanup uses four back-and-forth finishing passes at 200 mm/s without adding extrusion or bed scraping. Existing purge quantities, temperature waits, and slicer filament-change wiping remain unchanged.
 - Added OrcaSlicer 2.4.2+ filament-profile minimum chamber temperature support so leveling and printing can begin at the minimum while heating continues toward the target, including staggered startup heating.

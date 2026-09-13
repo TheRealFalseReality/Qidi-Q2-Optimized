@@ -67,11 +67,6 @@ def validate_source_state(
         raise SourcePatchError(
             "Source ledger firmware does not match the current printer firmware."
         )
-    stored_source = upgrade_sources.versions.get(state.package_version)
-    if stored_source is None:
-        raise SourcePatchError(
-            "Source ledger package version is not an approved upgrade source."
-        )
     stored_entries = {
         (
             entry.id,
@@ -80,7 +75,7 @@ def validate_source_state(
             entry.original_sha256,
             entry.desired_sha256,
         )
-        for entry in stored_source.source_patches
+        for entry in upgrade_sources.source_patches
     }
     specs = {patch.id: patch for patch in patches}
     seen_destinations: set[str] = set()

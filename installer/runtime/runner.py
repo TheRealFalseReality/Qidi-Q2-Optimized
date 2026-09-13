@@ -27,7 +27,14 @@ from .backup import (
     utc_now,
 )
 from .ensure_lines import ensure_line_after
-from .compatibility import CompatibilityValidationError, load_supported_upgrade_sources
+from .compatibility import (
+    CompatibilityValidationError,
+    load_supported_upgrade_sources,
+    validate_installed_state_identity,
+    validate_manifest_compatibility,
+    validate_patch_ledger,
+)
+from .config_transaction import FileChangePlan, apply_file_change_plan
 from .errors import PreviousPackageValidationError, UnsupportedFirmwareError
 from .firmware import detect_firmware_version
 from .host_reboot import arm_auto_update_reboot_followup
@@ -36,7 +43,6 @@ from .interaction import (
     maybe_restart_pending_service_if_idle,
 )
 from .legacy_manual_install import maybe_reset_legacy_manual_install
-from .fs_atomic import atomic_write_text
 from .manifest import active_patch_entries
 from .mirror import (
     collect_source_hashes,
@@ -58,14 +64,34 @@ from .models import (
     SystemOptimizationCliOptions,
 )
 from .path_safety import ensure_install_paths_safe
-from .source_patches import classify_install_source_patch, deploy_source_patch, validate_source_state
+from .source_patches import (
+    SourcePatchError,
+    classify_install_source_patch,
+    deploy_source_patch,
+    validate_source_state,
+)
 from .process_restart import read_printer_info, write_restart_marker
 from .postflight import verify_install_postflight
 from .preflight import run_install_config_preflight, run_install_environment_preflight
 from .rollback import RollbackJournal
 from .state_file import StateValidationError, load_installed_state, write_installed_state
-from .system_optimizations import maybe_apply_system_optimizations, maybe_emit_system_dry_run
+from .system_optimizations import (
+    discard_legacy_system_ledger_migration,
+    finalize_legacy_system_ledger_migration,
+    maybe_apply_system_optimizations,
+    maybe_emit_system_dry_run,
+    migrate_legacy_system_ledger,
+    recover_pending_legacy_system_ledger_migration,
+    system_ledger_needs_migration,
+    validate_legacy_system_ledger,
+    validate_system_ledger,
+)
 
+
+
+def _replace_legacy_system_ledger(state, ledger):
+    from dataclasses import replace
+    return replace(state, system_ledger=ledger)
 
 
 def run_install(
@@ -103,14 +129,27 @@ def run_install(
     reporter.status(messages.CHECKING_PACKAGE_VERSION)
     ensure_install_paths_safe(paths=paths, manifest=manifest)
     state_path = paths.printer_data_root / manifest.state_file
+    if not dry_run:
+        recover_pending_legacy_system_ledger_migration(paths, state_path)
     prior_state = None
+    compatibility = load_supported_upgrade_sources(
+        paths.installer_root / "supported_upgrade_sources.yaml"
+    )
+    validate_manifest_compatibility(manifest, compatibility)
     if state_path.exists():
         try:
             prior_state = load_installed_state(state_path)
         except StateValidationError as exc:
             raise PreviousPackageValidationError() from exc
-        if prior_state.package_version not in manifest.package.known_versions:
-            raise PreviousPackageValidationError()
+        try:
+            validate_installed_state_identity(prior_state, manifest)
+            validate_patch_ledger(prior_state, compatibility)
+            if system_ledger_needs_migration(prior_state.system_ledger):
+                validate_legacy_system_ledger(prior_state.system_ledger, manifest=manifest, paths=paths, environ=env)
+            else:
+                validate_system_ledger(prior_state.system_ledger, manifest=manifest, paths=paths)
+        except (CompatibilityValidationError, StateValidationError) as exc:
+            raise PreviousPackageValidationError() from exc
         reporter.debug(
             event="install.prior_state.loaded",
             state_path=state_path,
@@ -148,23 +187,18 @@ def run_install(
     )
     if prior_state is not None:
         try:
-            upgrade_sources = load_supported_upgrade_sources(
-                paths.installer_root / "supported_upgrade_sources.yaml"
-            )
             validate_source_state(
                 prior_state,
                 manifest.install.source_patches,
-                upgrade_sources=upgrade_sources,
+                upgrade_sources=compatibility,
                 expected_firmware=detected_firmware,
             )
-        except CompatibilityValidationError as exc:
+        except (CompatibilityValidationError, SourcePatchError) as exc:
             raise PreviousPackageValidationError() from exc
     source_results = tuple(
         classify_install_source_patch(paths=paths, patch=patch, firmware=detected_firmware, prior_state=prior_state)
         for patch in manifest.install.source_patches
     )
-
-    reporter.status(messages.CREATING_BACKUP)
     started_at = utc_now()
     backup_label = build_install_backup_label(
         label_prefix=manifest.backup.label_prefix,
@@ -172,6 +206,23 @@ def run_install(
         package_version=manifest.package.version,
         moment=started_at,
     )
+
+    plan = build_install_plan(
+        paths=paths,
+        manifest=manifest,
+        detected_firmware=detected_firmware,
+        prior_state=prior_state,
+        backup_label=backup_label,
+    )
+    config_changes = plan.file_changes
+    reporter.debug(
+        event="install.plan.built",
+        patches=len(plan.patch_results),
+        managed_tree_drift=len(plan.managed_tree_drift),
+        managed_tree_files=len(plan.managed_tree_files),
+    )
+
+    reporter.status(messages.CREATING_BACKUP)
     backup_zip_path = None
     if not dry_run:
         existing_backups = list_installer_backups(
@@ -211,19 +262,6 @@ def run_install(
             )
 
     reporter.status(messages.INSTALLING)
-    plan = build_install_plan(
-        paths=paths,
-        manifest=manifest,
-        detected_firmware=detected_firmware,
-        prior_state=prior_state,
-        backup_label=backup_label,
-    )
-    reporter.debug(
-        event="install.plan.built",
-        patches=len(plan.patch_results),
-        managed_tree_drift=len(plan.managed_tree_drift),
-        managed_tree_files=len(plan.managed_tree_files),
-    )
     if dry_run:
         _emit_install_dry_run_counters(reporter, manifest, detected_firmware)
         result = InstallResult(
@@ -241,6 +279,7 @@ def run_install(
             prior_state=prior_state,
             cli_options=system_options,
             environ=env,
+            run=run,
         )
         reporter.debug(event="install.complete", dry_run=True, backup_label=plan.backup_label)
         return result
@@ -259,6 +298,7 @@ def run_install(
         environ=env,
         system_options=system_options,
         source_results=source_results,
+        config_changes=config_changes,
         run=run,
     )
 
@@ -299,6 +339,9 @@ def build_install_plan(
     )
     return InstallPlan(
         backup_label=backup_label,
+        file_changes=_build_install_file_changes(
+            paths=paths, manifest=manifest, patch_results=patch_results
+        ),
         managed_tree_intent=managed_tree_intent,
         include_line_intents=include_line_intents,
         patch_results=patch_results,
@@ -324,6 +367,7 @@ def _execute_install(
     environ: dict[str, str],
     system_options: SystemOptimizationCliOptions,
     source_results=(),
+    config_changes=(),
     run=subprocess.run,
 ) -> InstallResult:
     state_path = paths.printer_data_root / manifest.state_file
@@ -332,12 +376,25 @@ def _execute_install(
         printer_data_root=paths.printer_data_root,
         source_directory=manifest.backup.source_directory,
     )
-    patch_results = []
+    migrated_paths: list[Path] = []
+    migration_committed = False
+    patch_results = list(plan.patch_results)
     active_patches = _active_install_patches(manifest, detected_firmware)
     active_section_patches = _active_install_section_patches(manifest, detected_firmware)
     install_counters = _install_counters_template(manifest, detected_firmware)
     saved_variables_written: dict[str, str] = {}
     try:
+        if prior_state is not None and system_ledger_needs_migration(prior_state.system_ledger):
+            prior_state = _replace_legacy_system_ledger(
+                prior_state,
+                migrate_legacy_system_ledger(
+                    prior_state.system_ledger,
+                    manifest=manifest,
+                    paths=paths,
+                    environ=environ,
+                    created_paths=migrated_paths,
+                ),
+            )
         touched_files = {state_path}
         touched_files.update(paths.printer_data_root / spec.file for spec in manifest.install.ensure_lines)
         touched_files.update(paths.printer_data_root / patch.file for patch in active_patches)
@@ -421,44 +478,9 @@ def _execute_install(
         install_counters["managed_trees"][0] = 1
         reporter.emit_install_counters(**_freeze_counters(install_counters))
 
-        for patch in active_patches:
-            path = paths.printer_data_root / patch.file
-            text = klipper_cfg.read_text(path)
-            resolved = klipper_cfg.resolve_unique_option(text, patch.section, patch.option)
-            result = patches.classify_install_patch(resolved.value, patch, detected_firmware, prior_state)
-            patch_results.append(result)
-            if result.classification == patches.INSTALL_APPLIED:
-                new_text = klipper_cfg.set_option_value(
-                    text, patch.section, patch.option, result.desired
-                )
-                journal.note_write()
-                atomic_write_text(path, new_text)
-            install_counters["patches"][0] += 1
-
-        for patch in active_section_patches:
-            path = paths.printer_data_root / patch.file
-            text = klipper_cfg.read_text(path)
-            current_section = _resolve_section_text_or_none(text, patch.section)
-            result = patches.classify_install_section_delete(
-                current_section, patch, detected_firmware
-            )
-            result = _preserve_prior_section_expected(result, prior_state)
-            patch_results.append(result)
-            if result.classification == patches.INSTALL_APPLIED:
-                new_text = klipper_cfg.delete_section(text, patch.section)
-                journal.note_write()
-                atomic_write_text(path, new_text)
-            install_counters["patches"][0] += 1
-        reporter.emit_install_counters(**_freeze_counters(install_counters))
-
-        for ensure_line in manifest.install.ensure_lines:
-            path = paths.printer_data_root / ensure_line.file
-            text = klipper_cfg.read_text(path)
-            new_text = ensure_line_after(text, ensure_line.line, ensure_line.after)
-            if new_text != text:
-                journal.note_write()
-                atomic_write_text(path, new_text)
-            install_counters["ensure_lines"][0] += 1
+        apply_file_change_plan(config_changes, journal=journal)
+        install_counters["patches"][0] = len(active_patches) + len(active_section_patches)
+        install_counters["ensure_lines"][0] = len(manifest.install.ensure_lines)
         reporter.emit_install_counters(**_freeze_counters(install_counters))
 
         verify_install_postflight(
@@ -498,10 +520,17 @@ def _execute_install(
                 for result in source_results
                 if result.original is not None
             ),
-            system_ledger=prior_state.system_ledger if prior_state is not None else None,
+            system_ledger=(
+                prior_state.system_ledger
+                if prior_state is not None and prior_state.system_ledger and prior_state.system_ledger.get("restore_preimages")
+                else None
+            ),
         )
         journal.note_write()
         write_installed_state(state_path, state)
+        migration_committed = True
+        finalize_legacy_system_ledger_migration(paths)
+        journal.commit()
         install_counters["state_write"][0] = 1
         reporter.emit_install_counters(**_freeze_counters(install_counters))
 
@@ -517,7 +546,7 @@ def _execute_install(
             auto_update_child=environ.get(LOCK_HELD_ENV) == "1",
             run=run,
         )
-    except Exception as exc:
+    except BaseException as exc:
         reporter.debug(
             event="install.failure",
             backup_label=plan.backup_label,
@@ -525,10 +554,12 @@ def _execute_install(
             message=getattr(exc, "message", str(exc)),
             rollback_started=journal.write_started,
         )
-        if journal.write_started:
+        if journal.write_started and not journal.committed:
             journal.rollback_or_raise(
                 exc, backup_label=plan.backup_label, backup_zip_path=backup_zip_path
             )
+        if not journal.committed and not migration_committed:
+            discard_legacy_system_ledger_migration(paths, migrated_paths)
         raise
 
     result = InstallResult(
@@ -609,15 +640,49 @@ def _collect_install_patch_results(
         path = paths.printer_data_root / patch.file
         text = klipper_cfg.read_text(path)
         resolved = klipper_cfg.resolve_unique_option(text, patch.section, patch.option)
-        results.append(patches.classify_install_patch(resolved.value, patch, detected_firmware, prior_state))
+        results.append(
+            patches.classify_install_patch(
+                resolved.value, patch, detected_firmware, prior_state
+            )
+        )
     for patch in _active_install_section_patches(manifest, detected_firmware):
         path = paths.printer_data_root / patch.file
         text = klipper_cfg.read_text(path)
         current_section = _resolve_section_text_or_none(text, patch.section)
-        result = patches.classify_install_section_delete(current_section, patch, detected_firmware)
-        results.append(_preserve_prior_section_expected(result, prior_state))
+        results.append(
+            _preserve_prior_section_expected(
+                patches.classify_install_section_delete(
+                    current_section, patch, detected_firmware
+                ),
+                prior_state,
+            )
+        )
     return tuple(results)
 
+
+def _build_install_file_changes(*, paths: RuntimePaths, manifest: Manifest, patch_results):
+    file_plan = FileChangePlan()
+    for result in patch_results:
+        if result.classification != patches.INSTALL_APPLIED:
+            continue
+        path = paths.printer_data_root / result.file
+        text = file_plan.text(path)
+        if result.option == "__section__":
+            file_plan.replace_text(path, klipper_cfg.delete_section(text, result.section))
+        else:
+            file_plan.replace_text(
+                path,
+                klipper_cfg.set_option_value(
+                    text, result.section, result.option, result.desired
+                ),
+            )
+    for ensure_line in manifest.install.ensure_lines:
+        path = paths.printer_data_root / ensure_line.file
+        text = file_plan.text(path)
+        new_text = ensure_line_after(text, ensure_line.line, ensure_line.after)
+        if new_text != text:
+            file_plan.replace_text(path, new_text)
+    return file_plan.changes()
 
 
 def _active_install_patches(manifest: Manifest, detected_firmware: str):
