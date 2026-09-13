@@ -48,7 +48,9 @@ Install, reinstall, restore, and uninstall SHALL execute as serialized, idle-pri
 
 #### Scenario: Restore reconstructs the archived runtime
 - **WHEN** restore receives explicit confirmation for a validated installer archive
-- **THEN** archived configuration and eligible external members are staged before replacing live runtime state
+- **THEN** it validates printer idleness after confirmation and before replacing live runtime state, including for config-only archives
+- **AND** printing, paused, unknown, or unavailable printer state prevents live replacement
+- **AND** archived configuration and eligible external members are staged before replacing live runtime state
 - **AND** partial failure restores the pre-restore state
 - **AND** every restored root is verified before success and recovery remains blocked until incomplete compensation is resolved
 
@@ -57,6 +59,15 @@ Install, reinstall, restore, and uninstall SHALL execute as serialized, idle-pri
 - **THEN** safety decisions remain equivalent to the normal flow
 - **AND** no unapproved backup, pruning, or live mutation occurs
 - **AND** interruption prevents later actions and exits without a traceback
+- **AND** interruption after an uncommitted configuration write restores recoverable preimages or records a recovery blocker if compensation cannot complete
+- **AND** interruption after configuration commit preserves the verified result and any outstanding activation or host-recovery obligation without reporting unfinished work as complete
+- **AND** compensation does not restore a whole vendor saved-variable file over live Klipper state
+
+#### Scenario: Preview and execution agree on file changes
+- **WHEN** install or uninstall evaluates the same validated files, release, and operator policy
+- **THEN** dry-run reports the same proposed file changes and preserved drift as execution
+- **AND** execution rejects changed preimages before overwriting them rather than silently applying a stale decision
+- **AND** live runtime interactions retain their own readiness, idleness, and authorization checks
 
 ### Requirement: Managed Klipper source activation
 The installer SHALL deploy firmware-scoped Klipper source only from validated provenance and consider a source change active only after a replacement Klipper process is verified ready.
@@ -114,7 +125,7 @@ The installer SHALL initialize absent optimized saved-variable preferences to re
 - **AND** uninstall does not remove or reset it
 
 ### Requirement: Opt-in recoverable host optimization
-The installer SHALL apply host OS optimizations only under explicit persisted policy, preserve recoverable preimages, and keep host-operation failures separate from a verified printer-configuration result.
+The installer SHALL apply host OS optimizations only under explicit persisted policy, preserve recoverable preimages, and keep host-operation failures separate from a verified printer-configuration result. System optimizations SHALL remain available through the same packaged install, update, and uninstall flow without requiring a separate package or operator command.
 
 #### Scenario: Enabled policy reconciles only recognized host state
 - **WHEN** system optimizations are enabled
@@ -122,6 +133,7 @@ The installer SHALL apply host OS optimizations only under explicit persisted po
 - **AND** installer-owned drift is reconciled without replacing first restore preimages
 - **AND** unowned, unknown, or user-modified state is preserved and reported
 - **AND** operation failure rolls back journaled host work without deleting a verified configuration install
+- **AND** incomplete host compensation retains a recovery blocker and does not report the overall operation as complete
 
 #### Scenario: Multi-plate 3MF metadata follows the selected plate
 - **WHEN** enabled Moonraker optimization reads a `.gcode.3mf` archive
@@ -131,7 +143,15 @@ The installer SHALL apply host OS optimizations only under explicit persisted po
 #### Scenario: Uninstall follows the operator's host-state decision
 - **WHEN** uninstall finds host restore preimages
 - **THEN** accepted restoration reverts only unchanged installer-owned targets
+- **AND** targets already at their retained preimages are left unchanged
+- **AND** user-modified files, symlinks, assets, or service states are preserved and reported
 - **AND** declined restoration or explicit keep policy leaves current host state unchanged
+
+#### Scenario: Reconciliation retains bounded recovery state
+- **WHEN** repeated checks find host optimizations already current
+- **THEN** installer recovery-state size and restoration-backup count do not grow with the number of checks
+- **AND** first restoration preimages and unresolved transaction or reboot evidence remain available
+- **AND** previously installed host ledgers remain recoverable when their historical action records are compacted
 
 #### Scenario: Host reboot is deferred until safe
 - **WHEN** an applied operation requires a host reboot
