@@ -88,7 +88,7 @@ TLTG_RESET_TOOL_MAPPINGS
 
 ### Print-start bed mesh
 
-By default this calibrates a fresh adaptive KAMP mesh by default. To reuse an existing Klipper bed-mesh profile for every optimized start, save its exact name from the Klipper console:
+Each optimized print start calibrates a fresh adaptive KAMP mesh by default. To reuse an existing Klipper bed-mesh profile for every optimized start, save its exact name from the Klipper console:
 
 ```gcode
 SAVE_VARIABLE VARIABLE=tltg_start_bed_mesh_profile VALUE='"default"'
@@ -131,8 +131,6 @@ You will need to slice files with the latest slicer gcode from this repo (or Orc
 
 The installer sets `tltg_keep_loaded_between_prints` to `1` if the setting does not already exist. That makes filament retention the default after installation.
 
-The behavior is straightforward:
-
 - `1`: Keep the current QIDI Box filament loaded after a completed print.
 - `0` or not set: Cut and unload the filament after a completed print.
 
@@ -173,11 +171,9 @@ The console identifies the toolhead sensor trip and the active pause policy.
 
 You will need to manually copy the machine GCode to your slicer of choice to take advantage of the optimized path.  The stock print path remains in place for backwards compatibility, safety, and general user happiness :)
 
-Use the pack that matches your slicer. The two packs are functionally aligned, but their placeholder syntax is different due to variable type differences.
+Use the pack that matches your slicer. The two packs are functionally aligned, but their placeholder syntax differs because of variable type differences.
    - OrcaSlicer: `orcaslicer_gcode/`
    - QIDI Studio: `qidistudio_gcode/`
-
-Use the pack that matches your slicer. The two packs are functionally aligned, but their placeholder syntax is different.
 
 ## Uninstall
 
