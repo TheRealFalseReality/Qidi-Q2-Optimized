@@ -11,6 +11,11 @@ from pathlib import Path
 from unittest import mock
 
 from installer.runtime import klipper_cfg
+from installer.runtime.box_enablement import (
+    SavedVariablePersistenceError,
+    maybe_write_required_tool_slot_variables,
+    saved_variable_verify_marker_path,
+)
 from installer.runtime.auto_update import (
     AutoUpdateError,
     LOCK_HELD_ENV,
@@ -95,12 +100,20 @@ class SourcePatchLifecycleMatrixTests(unittest.TestCase):
         source.write_bytes(stock_source)
         return printer_root, paths, stock_source
 
+    def _fixture_urlopen(self, printer_root, *, state="standby"):
+        return moonraker_urlopen(
+            state,
+            saved_variables_path=printer_root / "config/saved_variables.cfg",
+        )
+
     def _run_install(self, paths, *, environ=None):
         return run_install(
             paths,
             self.manifest,
             PlainReporter(io.StringIO()),
-            urlopen=moonraker_urlopen(),
+            urlopen=moonraker_urlopen(
+                saved_variables_path=paths.config_root / "saved_variables.cfg"
+            ),
             environ=environ,
         )
 
@@ -204,6 +217,191 @@ class SourcePatchLifecycleMatrixTests(unittest.TestCase):
             (paths.config_root / "tltg_optimized_state.yaml").read_text(
                 encoding="utf-8"
             ),
+        )
+
+    def test_missing_mapping_recheck_preserves_new_nonempty_choice(self):
+        printer_root, paths, _ = self._fixture("01.01.06.03")
+        saved_variables_path = printer_root / "config/saved_variables.cfg"
+        saved_variables_path.write_text(
+            "[Variables]\nbox_count = 1\nenable_box = 1\n",
+            encoding="utf-8",
+        )
+        base_urlopen = self._fixture_urlopen(printer_root)
+        object_queries = 0
+        gcode_scripts = []
+
+        def urlopen(request, timeout=0):
+            nonlocal object_queries
+            url = getattr(request, "full_url", str(request))
+            if "printer/objects/query?save_variables" in url:
+                object_queries += 1
+                if object_queries == 2:
+                    saved_variables_path.write_text(
+                        saved_variables_path.read_text(encoding="utf-8")
+                        + "value_t0 = 'operator-choice'\n",
+                        encoding="utf-8",
+                    )
+            if "/printer/gcode/script" in url:
+                gcode_scripts.append(json.loads(request.data.decode("utf-8"))["script"])
+            return base_urlopen(request, timeout=timeout)
+
+        self.assertTrue(
+            maybe_write_required_tool_slot_variables(
+                paths=paths, reporter=PlainReporter(io.StringIO()), urlopen=urlopen
+            )
+        )
+        self.assertFalse(any("VARIABLE=value_t0" in script for script in gcode_scripts))
+        self.assertEqual(
+            klipper_cfg.resolve_unique_option(
+                saved_variables_path.read_text(encoding="utf-8"), "Variables", "value_t0"
+            ).value,
+            "'operator-choice'",
+        )
+
+    def test_source_restart_rejects_changed_authorized_saved_values(self):
+        printer_root, paths, _ = self._fixture("01.01.06.03")
+        saved_variables_path = printer_root / "config/saved_variables.cfg"
+        saved_variables_path.write_text(
+            "[Variables]\nbox_count = 1\nenable_box = 0\nvalue_t0 = 'custom0'\n",
+            encoding="utf-8",
+        )
+        base_urlopen = self._fixture_urlopen(printer_root)
+
+        def urlopen(request, timeout=0):
+            url = getattr(request, "full_url", str(request))
+            response = base_urlopen(request, timeout=timeout)
+            if url.endswith("/machine/services/restart"):
+                saved_variables_path.write_text(
+                    saved_variables_path.read_text(encoding="utf-8").replace(
+                        "enable_box = 1", "enable_box = 0"
+                    ),
+                    encoding="utf-8",
+                )
+            return response
+
+        with self.assertRaises(SavedVariablePersistenceError):
+            run_install(
+                paths,
+                self.manifest,
+                PlainReporter(io.StringIO()),
+                input_stream=io.StringIO("Y\nN\n"),
+                urlopen=urlopen,
+            )
+
+        with self.assertRaises(SavedVariablePersistenceError):
+            run_install(
+                paths,
+                self.manifest,
+                PlainReporter(io.StringIO()),
+                input_stream=io.StringIO("Y\nN\n"),
+                urlopen=urlopen,
+            )
+
+        marker_path = saved_variable_verify_marker_path(paths)
+        expected_marker = json.loads(marker_path.read_text(encoding="utf-8"))
+        self.assertEqual(expected_marker["schema_version"], 1)
+        self.assertEqual(expected_marker["values"]["enable_box"], "1")
+        self.assertTrue(
+            (paths.managed_klipper_root / "klippy/extras/homing.py").is_file()
+        )
+
+        with self.assertRaises(SavedVariablePersistenceError):
+            self._run_install_with_urlopen(paths, self._fixture_urlopen(printer_root))
+        self.assertEqual(
+            json.loads(marker_path.read_text(encoding="utf-8")), expected_marker
+        )
+
+        saved_variables_path.write_text(
+            saved_variables_path.read_text(encoding="utf-8").replace(
+                "enable_box = 0", "enable_box = 1"
+            ),
+            encoding="utf-8",
+        )
+        marker_bytes = marker_path.read_bytes()
+        run_install(
+            paths,
+            self.manifest,
+            PlainReporter(io.StringIO()),
+            dry_run=True,
+            urlopen=self._fixture_urlopen(printer_root),
+        )
+        self.assertEqual(marker_path.read_bytes(), marker_bytes)
+
+        saved_variables_path.write_text(
+            saved_variables_path.read_text(encoding="utf-8").replace(
+                "enable_box = 1", "enable_box = 0"
+            ),
+            encoding="utf-8",
+        )
+        with mock.patch(
+            "installer.runtime.uninstall.atomic_delete", side_effect=OSError("marker delete failed")
+        ):
+            with self.assertRaises(OSError):
+                run_uninstall(
+                    paths,
+                    self.manifest,
+                    self.compatibility,
+                    PlainReporter(io.StringIO()),
+                    input_stream=io.StringIO("Y\n"),
+                    urlopen=self._fixture_urlopen(printer_root),
+                )
+        self.assertEqual(marker_path.read_bytes(), marker_bytes)
+        self.assertTrue((printer_root / "config/tltg_optimized_state.yaml").exists())
+
+        run_uninstall(
+            paths,
+            self.manifest,
+            self.compatibility,
+            PlainReporter(io.StringIO()),
+            input_stream=io.StringIO("Y\n"),
+            urlopen=self._fixture_urlopen(printer_root),
+        )
+        self.assertFalse(marker_path.exists())
+        self.assertFalse((printer_root / "config/tltg_optimized_state.yaml").exists())
+
+        self._run_install_with_urlopen(paths, self._fixture_urlopen(printer_root))
+        self.assertTrue((printer_root / "config/tltg_optimized_state.yaml").exists())
+
+        saved_variables = saved_variables_path.read_text(encoding="utf-8")
+        self.assertEqual(
+            klipper_cfg.resolve_unique_option(saved_variables, "Variables", "value_t0").value,
+            "'custom0'",
+        )
+        self.assertEqual(
+            klipper_cfg.resolve_unique_option(
+                saved_variables, "Variables", "tltg_keep_loaded_between_prints"
+            ).value,
+            "1",
+        )
+        for tool in range(1, 4):
+            self.assertEqual(
+                klipper_cfg.resolve_unique_option(
+                    saved_variables, "Variables", f"value_t{tool}"
+                ).value,
+                f"'slot{tool}'",
+            )
+
+    def test_saved_variable_write_failure_stops_install_without_file_fallback(self):
+        printer_root, paths, _ = self._fixture("01.01.06.03")
+        saved_variables_path = printer_root / "config/saved_variables.cfg"
+        before = saved_variables_path.read_bytes()
+        base_urlopen = self._fixture_urlopen(printer_root)
+
+        def failing_urlopen(request, timeout=0):
+            if "/printer/gcode/script" in getattr(request, "full_url", str(request)):
+                raise OSError("Moonraker unavailable")
+            return base_urlopen(request, timeout=timeout)
+
+        with self.assertRaises(SavedVariablePersistenceError):
+            self._run_install_with_urlopen(paths, failing_urlopen)
+        self.assertEqual(saved_variables_path.read_bytes(), before)
+
+    def _run_install_with_urlopen(self, paths, urlopen):
+        return run_install(
+            paths,
+            self.manifest,
+            PlainReporter(io.StringIO()),
+            urlopen=urlopen,
         )
 
     def test_prior_managed_homing_values_migrate_for_all_variants(self):
@@ -311,8 +509,9 @@ class SourcePatchLifecycleMatrixTests(unittest.TestCase):
                     json.dumps({"latest_checksum": "0" * 64}), encoding="utf-8"
                 )
                 enrollment_path(paths).write_text("1\n", encoding="utf-8")
-                pids = iter((100, 101))
+                process = {"id": 100}
                 child_calls = []
+                fallback_urlopen = self._fixture_urlopen(printer_root)
 
                 def urlopen(request, timeout=0):
                     url = getattr(request, "full_url", str(request))
@@ -322,19 +521,12 @@ class SourcePatchLifecycleMatrixTests(unittest.TestCase):
                         return _BytesResponse(archive)
                     if url.endswith("/printer/info"):
                         return _JsonResponse(
-                            {"result": {"state": "ready", "process_id": next(pids)}}
+                            {"result": {"state": "ready", "process_id": process["id"]}}
                         )
                     if url.endswith("/machine/services/restart"):
+                        process["id"] += 1
                         return _JsonResponse({"result": "ok"})
-                    if "printer/objects/query" in url:
-                        return _JsonResponse(
-                            {
-                                "result": {
-                                    "status": {"print_stats": {"state": "standby"}}
-                                }
-                            }
-                        )
-                    self.fail(f"Unexpected URL: {url}")
+                    return fallback_urlopen(request, timeout=timeout)
 
                 def child_run(command, **kwargs):
                     child_calls.append((command, kwargs))
@@ -425,6 +617,103 @@ class SourcePatchLifecycleMatrixTests(unittest.TestCase):
                     run=failed_sudo,
                 )
         self.assertFalse(enrollment_path(paths).exists())
+
+    def test_unenrolled_current_checksum_does_not_repair_saved_variables(self):
+        printer_root, paths, _ = self._fixture("01.01.06.03")
+        checksum = "a" * 64
+        before = (printer_root / "config/saved_variables.cfg").read_bytes()
+        state_path(paths).write_text(json.dumps({"latest_checksum": checksum}), encoding="utf-8")
+        base_urlopen = self._fixture_urlopen(printer_root)
+        gcode_scripts = []
+
+        def urlopen(request, timeout=0):
+            if getattr(request, "full_url", str(request)).endswith(".sha256"):
+                return _BytesResponse(f"{checksum} bundle\n".encode())
+            if "/printer/gcode/script" in getattr(request, "full_url", str(request)):
+                gcode_scripts.append(request.data)
+            return base_urlopen(request, timeout=timeout)
+
+        result = run_auto_update_check(
+            paths=paths,
+            reporter=PlainReporter(io.StringIO()),
+            environ={"TLTG_AUTO_UPDATE_CHECKSUM_URL": "https://example.invalid/latest.sha256"},
+            urlopen=urlopen,
+        )
+        self.assertEqual(result.action, "initialized")
+        self.assertEqual(gcode_scripts, [])
+        self.assertEqual((printer_root / "config/saved_variables.cfg").read_bytes(), before)
+
+        printer_root, paths, _ = self._fixture("01.01.06.03")
+        self._run_install(paths)
+        saved_variables_path = printer_root / "config/saved_variables.cfg"
+        saved_variables_path.write_text(
+            saved_variables_path.read_text(encoding="utf-8").replace(
+                "tltg_keep_loaded_between_prints = 1\n", ""
+            ),
+            encoding="utf-8",
+        )
+        checksum = "a" * 64
+        enrollment_path(paths).write_text("1\n", encoding="utf-8")
+        state_path(paths).write_text(json.dumps({"latest_checksum": checksum}), encoding="utf-8")
+        base_urlopen = self._fixture_urlopen(printer_root)
+
+        def urlopen(request, timeout=0):
+            if getattr(request, "full_url", str(request)).endswith(".sha256"):
+                return _BytesResponse(f"{checksum} bundle\n".encode())
+            return base_urlopen(request, timeout=timeout)
+
+        result = run_auto_update_check(
+            paths=paths,
+            reporter=PlainReporter(io.StringIO()),
+            environ={"TLTG_AUTO_UPDATE_CHECKSUM_URL": "https://example.invalid/latest.sha256"},
+            urlopen=urlopen,
+        )
+        self.assertEqual(result.action, "already-current")
+        self.assertEqual(
+            klipper_cfg.resolve_unique_option(
+                saved_variables_path.read_text(encoding="utf-8"),
+                "Variables",
+                "tltg_keep_loaded_between_prints",
+            ).value,
+            "1",
+        )
+
+    def test_unattended_saved_variable_repair_skips_active_and_unavailable_printers(self):
+        printer_root, paths, _ = self._fixture("01.01.06.03")
+        self._run_install(paths)
+        before = (printer_root / "config/saved_variables.cfg").read_bytes()
+        checksum = "a" * 64
+        enrollment_path(paths).write_text("1\n", encoding="utf-8")
+        state_path(paths).write_text(json.dumps({"latest_checksum": checksum}), encoding="utf-8")
+
+        active_base_urlopen = self._fixture_urlopen(printer_root, state="printing")
+
+        def active_urlopen(request, timeout=0):
+            if getattr(request, "full_url", str(request)).endswith(".sha256"):
+                return _BytesResponse(f"{checksum} bundle\n".encode())
+            return active_base_urlopen(request, timeout=timeout)
+
+        def unavailable_urlopen(request, timeout=0):
+            url = getattr(request, "full_url", str(request))
+            if url.endswith(".sha256"):
+                return _BytesResponse(f"{checksum} bundle\n".encode())
+            return _JsonResponse({"result": {}})
+
+        for urlopen, expected_action in (
+            (active_urlopen, "skipped-active-print"),
+            (unavailable_urlopen, "skipped-unknown-printer-state"),
+        ):
+            result = run_auto_update_check(
+                paths=paths,
+                reporter=PlainReporter(io.StringIO()),
+                environ={
+                    "TLTG_AUTO_UPDATE_CHECKSUM_URL": "https://example.invalid/latest.sha256",
+                    "TLTG_AUTO_UPDATE_ARCHIVE_URL": "https://example.invalid/latest.tar.gz",
+                },
+                urlopen=urlopen,
+            )
+            self.assertEqual(result.action, expected_action)
+        self.assertEqual((printer_root / "config/saved_variables.cfg").read_bytes(), before)
 
     def test_unenrolled_changed_checksum_records_latest_without_installing(self):
         printer_root, paths, _ = self._fixture("01.01.06.03")
@@ -520,7 +809,8 @@ class SourcePatchLifecycleMatrixTests(unittest.TestCase):
 
         archive = _release_archive()
         checksum = hashlib.sha256(archive).hexdigest()
-        pids = iter((100, 101))
+        process = {"id": 100}
+        fallback_urlopen = self._fixture_urlopen(printer_root)
 
         def urlopen(request, timeout=0):
             url = getattr(request, "full_url", str(request))
@@ -530,15 +820,12 @@ class SourcePatchLifecycleMatrixTests(unittest.TestCase):
                 return _BytesResponse(archive)
             if url.endswith("/printer/info"):
                 return _JsonResponse(
-                    {"result": {"state": "ready", "process_id": next(pids)}}
+                    {"result": {"state": "ready", "process_id": process["id"]}}
                 )
             if url.endswith("/machine/services/restart"):
+                process["id"] += 1
                 return _JsonResponse({"result": "ok"})
-            if "printer/objects/query" in url:
-                return _JsonResponse(
-                    {"result": {"status": {"print_stats": {"state": "standby"}}}}
-                )
-            self.fail(f"Unexpected URL: {url}")
+            return fallback_urlopen(request, timeout=timeout)
 
         def child_run(command, **kwargs):
             child_paths = resolve_runtime_paths(

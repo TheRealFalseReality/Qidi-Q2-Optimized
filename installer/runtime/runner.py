@@ -15,6 +15,8 @@ from .box_enablement import (
     maybe_prompt_align_tool_slots,
     maybe_prompt_enable_box,
     maybe_write_required_tool_slot_variables,
+    verify_pending_saved_variable_expectations,
+    write_saved_variable_verify_marker,
 )
 from .backup import (
     build_install_backup_label,
@@ -116,6 +118,8 @@ def run_install(
         )
     else:
         reporter.debug(event="install.prior_state.missing", state_path=state_path)
+
+    verify_pending_saved_variable_expectations(paths, clear=not dry_run, urlopen=urlopen)
 
     reporter.status(messages.PERFORMING_PREFLIGHT_CHECKS)
     run_install_environment_preflight(
@@ -332,8 +336,9 @@ def _execute_install(
     active_patches = _active_install_patches(manifest, detected_firmware)
     active_section_patches = _active_install_section_patches(manifest, detected_firmware)
     install_counters = _install_counters_template(manifest, detected_firmware)
+    saved_variables_written: dict[str, str] = {}
     try:
-        touched_files = {state_path, paths.config_root / "saved_variables.cfg"}
+        touched_files = {state_path}
         touched_files.update(paths.printer_data_root / spec.file for spec in manifest.install.ensure_lines)
         touched_files.update(paths.printer_data_root / patch.file for patch in active_patches)
         touched_files.update(paths.printer_data_root / patch.file for patch in active_section_patches)
@@ -352,23 +357,31 @@ def _execute_install(
             paths=paths,
             reporter=reporter,
             journal=journal,
+            written=saved_variables_written,
+            urlopen=urlopen,
         )
         maybe_prompt_enable_box(
             paths=paths,
             reporter=reporter,
             input_stream=input_stream,
             journal=journal,
+            written=saved_variables_written,
+            urlopen=urlopen,
         )
         maybe_write_required_tool_slot_variables(
             paths=paths,
             reporter=reporter,
             journal=journal,
+            written=saved_variables_written,
+            urlopen=urlopen,
         )
         maybe_prompt_align_tool_slots(
             paths=paths,
             reporter=reporter,
             input_stream=input_stream,
             journal=journal,
+            written=saved_variables_written,
+            urlopen=urlopen,
         )
 
         for directory in manifest.install.ensure_directories:
@@ -543,7 +556,9 @@ def _execute_install(
             urlopen=urlopen,
         )
     if paths.restart_marker_path.exists():
-        maybe_restart_pending_service_if_idle(
+        if saved_variables_written:
+            write_saved_variable_verify_marker(paths, saved_variables_written)
+        restarted = maybe_restart_pending_service_if_idle(
             paths=paths,
             allowed_entries={
                 patch.id: patch.destination for patch in manifest.install.source_patches
@@ -552,6 +567,8 @@ def _execute_install(
             input_stream=input_stream,
             urlopen=urlopen,
         )
+        if restarted:
+            verify_pending_saved_variable_expectations(paths, urlopen=urlopen)
     else:
         maybe_restart_klipper(
             reporter=reporter,

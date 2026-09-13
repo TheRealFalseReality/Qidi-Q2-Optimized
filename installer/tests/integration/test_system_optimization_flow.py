@@ -50,7 +50,9 @@ class SystemOptimizationFlowTests(unittest.TestCase):
         self.assertIn("System optimizations dry-run:", stream.getvalue())
 
         install_responses = io.StringIO("yes\nyes\nno\nunused\n")
-        base_urlopen = moonraker_urlopen()
+        base_urlopen = moonraker_urlopen(
+            saved_variables_path=paths.config_root / "saved_variables.cfg"
+        )
         install_idle_checks = 0
 
         def install_urlopen(request, timeout=0):

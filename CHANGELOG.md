@@ -1,11 +1,14 @@
 # Changelog
 
+## 26.09.09.2
+- Persisted installer defaults through Klipper's live Moonraker `SAVE_VARIABLE` path instead of replacing a stale `saved_variables.cfg` snapshot. Updates and already-current enrolled auto-update checks repair only missing defaults; existing retention values and non-empty custom QIDI Box tool-slot mappings stay unchanged. A source-restart verification mismatch retains the exact authorized expectations and blocks later installer or updater work until Klipper confirms them; dry-runs retain that evidence and successful uninstall removes it. Moonraker does not provide compare-and-set semantics, so a concurrent update after the final live eligibility check can still win.
+
 ## 26.09.09.1
 - Reduced the X and Y first-pass homing speed from 100 mm/s to 65 mm/s and the homing retraction speed from 1,000 mm/s to 500 mm/s; retained the existing 55 mm/s second pass.
 - Optimized silicone-wiper cleanup uses four back-and-forth finishing passes at 200 mm/s without adding extrusion or bed scraping. Existing purge quantities, temperature waits, and slicer filament-change wiping remain unchanged.
 - Added OrcaSlicer 2.4.2+ filament-profile minimum chamber temperature support so leveling and printing can begin at the minimum while heating continues toward the target, including staggered startup heating.
 - Preserved existing chamber waits for zero or omitted minimums, QIDI Studio, and independent slicer-profile or optimized-macro updates.
-- Exposed AP-board SoC, toolhead MCU, and mainboard MCU temperatures to Moonraker and Fluidd
+- Exposed AP-board SoC, toolhead MCU, and mainboard MCU temperatures to Moonraker and Fluidd.
 
 ## 26.08.29.1
 - Restored the stock QIDI Y395–Y397 rear-bed nozzle scrape footprint after the cable-chain orientation traverse.

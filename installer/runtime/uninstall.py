@@ -11,6 +11,7 @@ from .auto_update import (
     auto_updates_configured,
     disable_auto_updates,
 )
+from .box_enablement import saved_variable_verify_marker_path
 from .backup import (
     build_uninstall_backup_label,
     create_config_backup,
@@ -27,7 +28,7 @@ from .interaction import (
     maybe_restart_klipper,
     maybe_restart_pending_service_if_idle,
 )
-from .fs_atomic import atomic_write_text
+from .fs_atomic import atomic_delete, atomic_write_text
 from .mirror import detect_uninstall_managed_tree_drift, remove_tree
 from .path_safety import ensure_uninstall_paths_safe
 from .source_patches import restore_source_patch, validate_source_state
@@ -90,6 +91,7 @@ def run_uninstall(
     managed_tree_root = paths.printer_data_root / manifest.managed_tree.destination
     include_line_path = paths.printer_data_root / include_line.file
 
+    pending_saved_variables_marker = saved_variable_verify_marker_path(paths)
     non_patch_markers = {
         "state_file": state_path.exists(),
         "managed_tree": managed_tree_root.exists(),
@@ -101,6 +103,7 @@ def run_uninstall(
         state_file=non_patch_markers["state_file"],
         managed_tree=non_patch_markers["managed_tree"],
         include_line=non_patch_markers["include_line"],
+        pending_saved_variables=pending_saved_variables_marker.exists(),
     )
 
     state = None
@@ -126,6 +129,8 @@ def run_uninstall(
         reporter.debug(event="uninstall.ledger.missing", state_path=state_path)
 
     if not any(non_patch_markers.values()) and not any(patch_markers.values()):
+        if pending_saved_variables_marker.exists() and not dry_run:
+            atomic_delete(pending_saved_variables_marker)
         if not dry_run:
             _disable_enrolled_auto_updates(
                 paths=paths,
@@ -341,7 +346,7 @@ def _execute_uninstall(
     uninstall_counters = _uninstall_counters_template(state)
     uninstall_counters["managed_tree_drift"][0] = 1
     try:
-        touched_files = {state_path, include_line_path}
+        touched_files = {state_path, include_line_path, saved_variable_verify_marker_path(paths)}
         touched_files.update(paths.printer_data_root / entry.file for entry in state.patch_ledger)
         for path in touched_files:
             journal.track_file(path)
@@ -432,6 +437,9 @@ def _execute_uninstall(
         if state_path.exists():
             journal.note_write()
             delete_state_file(state_path)
+        if saved_variable_verify_marker_path(paths).exists():
+            journal.note_write()
+            atomic_delete(saved_variable_verify_marker_path(paths))
         uninstall_counters["state_remove"][0] = 1
         reporter.emit_uninstall_counters(**_freeze_counters(uninstall_counters))
     except Exception as exc:

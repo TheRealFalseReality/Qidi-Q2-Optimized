@@ -299,9 +299,47 @@ def main(argv: list[str] | None = None) -> int:
 
 
 @contextmanager
-def moonraker_server(state: str):
+def moonraker_server(state: str, *, saved_variables_path: Path | None = None):
     payload = {"result": {"status": {"print_stats": {"state": state}}}}
     process = {"pid": 100}
+
+    saved_values = {"box_count": "0", "enable_box": "0"}
+
+    def saved_variables() -> dict[str, str]:
+        path = saved_variables_path
+        if path is None:
+            return dict(saved_values)
+        if not path.exists():
+            return dict(saved_values)
+        values = {}
+        in_variables = False
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if line.strip() == "[Variables]":
+                in_variables = True
+                continue
+            if in_variables and line.startswith("["):
+                break
+            if in_variables and "=" in line:
+                name, value = line.split("=", 1)
+                values[name.strip()] = value.strip().strip("'\"")
+        return values
+
+    def persist_script(body: bytes) -> None:
+        script = json.loads(body.decode("utf-8"))["script"]
+        match = re.fullmatch(r"SAVE_VARIABLE VARIABLE=([a-z0-9_]+) VALUE=(.+)", script)
+        if match is None:
+            raise ValueError(f"unexpected saved-variable command: {script}")
+        name, value = match.groups()
+        if saved_variables_path is None:
+            saved_values[name] = value.strip("'\"")
+            return
+        text = saved_variables_path.read_text(encoding="utf-8")
+        line = f"{name} = {value}"
+        if re.search(rf"(?m)^{re.escape(name)}\s*=.*$", text):
+            text = re.sub(rf"(?m)^{re.escape(name)}\s*=.*$", line, text)
+        else:
+            text += line + "\n"
+        saved_variables_path.write_text(text, encoding="utf-8")
 
     class Handler(BaseHTTPRequestHandler):
         def _respond(self, body):
@@ -315,12 +353,17 @@ def moonraker_server(state: str):
         def do_GET(self):
             if self.path.endswith("/printer/info"):
                 self._respond({"result": {"state": "ready", "process_id": process["pid"]}})
+            elif self.path.endswith("/printer/objects/query?save_variables"):
+                self._respond({"result": {"status": {"save_variables": {"variables": saved_variables()}}}})
             else:
                 self._respond(payload)
 
         def do_POST(self):
             if self.path.endswith("/machine/services/restart"):
                 process["pid"] += 1
+            elif self.path.endswith("/printer/gcode/script"):
+                length = int(self.headers.get("Content-Length", "0"))
+                persist_script(self.rfile.read(length))
             self._respond({"result": "ok"})
 
         def log_message(self, fmt, *args):

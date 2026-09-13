@@ -1,17 +1,20 @@
 ## Why
 
-The current installer repeats complete ownership and source-provenance metadata for every historical package version, even though each supported version upgrades directly to the current release. This makes release metadata and version bumps progressively larger without materially improving admission safety.
+The installer repeats ownership and source-provenance metadata for historical package versions even though every supported version upgrades directly to the current release. Its planning, reporting, argument parsing, and host-state bookkeeping also duplicate work. Consolidating these paths reduces maintenance while correcting inconsistent restore, interruption, and drift protection.
+
+System optimizations remain part of the same packaged install, update, and uninstall experience. Cleanup must preserve their persisted policy, recovery, and reboot behavior rather than move them into a separate product or require another operator command.
 
 ## What Changes
 
-- Retain an explicit list of historical package versions accepted as direct upgrade sources.
-- Replace per-version patch-target and source-provenance profiles with one cumulative compatibility envelope used to validate historical installed-state ledgers.
-- Keep the current release manifest authoritative for installation and convergence to the current package version.
-- Change release version tooling so ordinary releases add the new package version to the accepted-source list without duplicating the compatibility envelope.
-- Preserve historical release bundles as the way to install or run an older release; the current installer will not reconstruct historical manifests.
-- Replace enumerated config-only backup versions with a format boundary or equivalent compact format rule while preserving validation of historical archives.
-- Validate installed-state package identity alongside version and ledger compatibility.
-- Preserve fail-closed upgrade, reinstall, uninstall, rollback, restore, and source-provenance safety guarantees.
+- Retain explicit historical package-version admission and replace per-version ownership profiles with one cumulative compatibility envelope.
+- Keep the current manifest authoritative for convergence; simplify version bumps and historical backup-format classification without weakening package identity or source-provenance validation.
+- Use one validated file-change plan for preview and execution, grouping edits by destination and rejecting stale preimages before mutation.
+- Consolidate configuration transaction safeguards across install, uninstall, and restore, including idle-printer admission and rollback on interruption.
+- Keep system optimizations integrated, with host compensation and results separate from an already verified configuration result; preserve user-modified host state during restoration.
+- Bound persisted host recovery state and avoid new preimage backups for already-current operations while retaining first restoration preimages and pending recovery evidence.
+- Share reporting content between plain and Rich renderers and move command-line parsing into Python while preserving existing entrypoints, flags, prompts, and output modes.
+- Move simulated host-service and mount behavior into test fixtures so tests exercise production decision logic without real network, service, or printer access.
+- Preserve historical release bundles and changelog history; extend existing lifecycle and bundle coverage rather than add a generic installer framework.
 
 ## Capabilities
 
@@ -21,8 +24,10 @@ None.
 
 ### Modified Capabilities
 
-None. This change refactors installer compatibility metadata without changing operator-visible lifecycle requirements.
+- `installer-lifecycle`: clarify restore admission, interrupted-transaction compensation, preview consistency, integrated host optimization, drift-safe host restoration, and bounded reconciliation state.
 
 ## Impact
 
-Affected areas include `installer/package.yaml`, `installer/supported_upgrade_sources.yaml`, compatibility and installed-state validation under `installer/runtime/`, backup-format classification, `scripts/bump_installer_version.py`, `scripts/check_installer_known_versions.py`, installer lifecycle tests, bundle validation, and release-maintenance guidance. `CHANGELOG.md` remains historical release documentation and is not condensed.
+Affected areas include compatibility metadata and models, configuration planning and transactions, host optimization state and restoration, reporting, release launchers, version tooling, existing lifecycle tests, bundle smoke coverage, and release-maintenance guidance. `installer/runtime/` remains the packaged runtime; system optimizations are not split into a separate package or workflow.
+
+Implementation must preserve live Moonraker saved-variable handling and pending activation verification from concurrent installer work. The package version and matching changelog section advance with implementation, including the safety fixes as well as metadata condensation. No vendor configuration, optimized values, or source payload changes are intended.
