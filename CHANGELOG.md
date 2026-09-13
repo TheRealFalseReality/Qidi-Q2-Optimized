@@ -1,10 +1,5 @@
 # Changelog
 
-## 26.09.13.1
-- Changed fresh QIDI Box and external-spool print-start cleanup to preserve every existing cooldown wipe while using the stock mixed-speed pre-scrape pattern.
-- Preserved the cooled rear-bed rectangle and three-circle scrape, then safely returned to the chute for four 200 mm/s finishing cycles and waste release before leveling.
-- Kept retained-filament starts, non-start purge cleanup, manual load and unload, end cleanup, vendor commands, purge quantities, and both slicer packs unchanged.
-
 ## 26.09.09.1
 - Replaced per-version upgrade metadata with one validated list of allowed patch targets and source hashes. Supported historical package versions remain explicitly listed and can upgrade directly.
 - Unified configuration change planning for install, uninstall, and restore. The installer rejects files changed since planning, requires an idle printer before restore, and rolls back interrupted, uncommitted writes without replacing saved-variable files.
@@ -14,7 +9,8 @@
 - Saved installer defaults through Klipper's `SAVE_VARIABLE` command via Moonraker instead of replacing a stale `saved_variables.cfg` snapshot. Updates and already-current enrolled auto-update checks repair only missing defaults; existing retention values and non-empty custom QIDI Box tool-slot mappings stay unchanged.
 - Blocked further installer or updater work when saved-variable verification fails after a source-patch restart. The expected values remain recorded until Klipper confirms them; dry-runs preserve the record and successful uninstall removes it. Moonraker does not support compare-and-set, so a concurrent update after the final live eligibility check can still win.
 - Reduced the X and Y first-pass homing speed from 100 mm/s to 65 mm/s and the homing retraction speed from 1,000 mm/s to 500 mm/s; retained the existing 55 mm/s second pass.
-- Optimized silicone-wiper cleanup uses four back-and-forth finishing passes at 200 mm/s without adding extrusion or bed scraping. Existing purge quantities, temperature waits, and slicer filament-change wiping remain unchanged.
+- Fresh QIDI Box and external-spool print-start cleanup preserves every existing cooldown wipe while using the stock mixed-speed pre-scrape pattern. After the cooled rear-bed rectangle and three-circle scrape, the nozzle returns safely to the chute for four 200 mm/s finishing cycles and waste release before leveling.
+- Retained-filament starts, non-start purge cleanup, unload cleanup, and staged end cleanup use four back-and-forth finishing passes at 200 mm/s. Manual loading, vendor commands, purge quantities, temperature gates, and slicer filament-change wiping remain unchanged.
 - Added OrcaSlicer 2.4.2+ filament-profile minimum chamber temperature support so leveling and printing can begin at the minimum while heating continues toward the target, including staggered startup heating.
 - Preserved existing chamber waits for zero or omitted minimums, QIDI Studio, and independent slicer-profile or optimized-macro updates.
 - Exposed AP-board SoC, toolhead MCU, and mainboard MCU temperatures to Moonraker and Fluidd.
