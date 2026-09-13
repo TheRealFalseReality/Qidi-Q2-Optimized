@@ -1,6 +1,7 @@
 # Changelog
 
 ## 26.09.09.2
+- Fixed a `NameError` during idle QIDI Box topology reconciliation so automatic-update checks can initialize missing tool-slot mappings after the Box count changes while preserving custom mappings.
 - Persisted installer defaults through Klipper's live Moonraker `SAVE_VARIABLE` path instead of replacing a stale `saved_variables.cfg` snapshot. Updates and already-current enrolled auto-update checks repair only missing defaults; existing retention values and non-empty custom QIDI Box tool-slot mappings stay unchanged. A source-restart verification mismatch retains the exact authorized expectations and blocks later installer or updater work until Klipper confirms them; dry-runs retain that evidence and successful uninstall removes it. Moonraker does not provide compare-and-set semantics, so a concurrent update after the final live eligibility check can still win.
 
 ## 26.09.09.1

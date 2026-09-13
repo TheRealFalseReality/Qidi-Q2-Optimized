@@ -13,6 +13,7 @@ from unittest import mock
 from installer.runtime import klipper_cfg
 from installer.runtime.box_enablement import (
     SavedVariablePersistenceError,
+    maybe_reconcile_tool_slots_after_box_count_change,
     maybe_write_required_tool_slot_variables,
     saved_variable_verify_marker_path,
 )
@@ -218,6 +219,28 @@ class SourcePatchLifecycleMatrixTests(unittest.TestCase):
                 encoding="utf-8"
             ),
         )
+
+        saved_variables_path.write_text(
+            klipper_cfg.set_option_value(saved_variables, "Variables", "box_count", "3"),
+            encoding="utf-8",
+        )
+        reporter = PlainReporter(io.StringIO())
+        urlopen = self._fixture_urlopen(printer_root)
+        self.assertTrue(maybe_reconcile_tool_slots_after_box_count_change(
+            paths=paths, reporter=reporter, urlopen=urlopen
+        ))
+        reconciled = saved_variables_path.read_text(encoding="utf-8")
+        for tool in range(12):
+            self.assertEqual(
+                klipper_cfg.resolve_unique_option(
+                    reconciled, "Variables", f"value_t{tool}"
+                ).value,
+                "'slot3'" if tool == 1 else f"'slot{tool}'",
+            )
+        self.assertFalse(maybe_reconcile_tool_slots_after_box_count_change(
+            paths=paths, reporter=reporter, urlopen=urlopen
+        ))
+        self.assertEqual(saved_variables_path.read_text(encoding="utf-8"), reconciled)
 
     def test_missing_mapping_recheck_preserves_new_nonempty_choice(self):
         printer_root, paths, _ = self._fixture("01.01.06.03")

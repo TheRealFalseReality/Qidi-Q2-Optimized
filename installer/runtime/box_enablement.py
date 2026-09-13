@@ -20,6 +20,7 @@ from .reporter import DetailGroup
 VALUE_T_RE = re.compile(r"^value_t(?P<tool>\d+)$")
 SAVED_VARIABLE_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 MAX_SAVED_VARIABLE_VALUE_LENGTH = 96
+RUNTIME_STATE_FILE = "config/tltg_optimized_runtime_state.json"
 SAVED_VARIABLE_VERIFY_MARKER = ".tltg_optimized_saved_variables_verify_pending"
 UrlOpenFn = Callable[..., object]
 
