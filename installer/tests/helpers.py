@@ -102,14 +102,57 @@ class _JsonResponse:
         return self._body
 
 
-def moonraker_urlopen(state: str | None = "standby", *, raw_payload=None):
+def moonraker_urlopen(
+    state: str | None = "standby", *, raw_payload=None, saved_variables_path: Path | None = None
+):
     payload = raw_payload
     if payload is None:
         payload = {"result": {"status": {"print_stats": {"state": state}}}}
     process = {"pid": 100}
 
+    def saved_variables():
+        if saved_variables_path is None or not saved_variables_path.exists():
+            return {"box_count": 0, "enable_box": 0}
+        from installer.runtime import klipper_cfg
+
+        text = saved_variables_path.read_text(encoding="utf-8")
+        section = klipper_cfg.resolve_unique_section(text, "Variables")
+        values = {}
+        for line in text.splitlines(keepends=True)[section.header_index + 1 : section.end_index]:
+            parsed = klipper_cfg.parse_option_line(line)
+            if parsed is not None:
+                values[parsed.key] = parsed.value.strip().strip("'\"")
+        return values
+
+    def persist_script(request):
+        if saved_variables_path is None:
+            return
+        import re
+
+        body = json.loads(request.data.decode("utf-8"))
+        script = body["script"]
+        match = re.fullmatch(r"SAVE_VARIABLE VARIABLE=([a-z0-9_]+) VALUE=(.+)", script)
+        if match is None:
+            raise AssertionError(f"Unexpected G-code: {script}")
+        name, value = match.groups()
+        text = saved_variables_path.read_text(encoding="utf-8")
+        from installer.runtime import klipper_cfg
+
+        try:
+            text = klipper_cfg.set_option_value(text, "Variables", name, value)
+        except klipper_cfg.TargetResolutionError as exc:
+            if exc.reason != "missing":
+                raise
+            text += f"{name} = {value}\n"
+        saved_variables_path.write_text(text, encoding="utf-8")
+
     def urlopen(request, timeout=0):
         url = getattr(request, "full_url", str(request))
+        if "/printer/gcode/script" in url:
+            persist_script(request)
+            return _JsonResponse({"result": "ok"})
+        if "printer/objects/query?save_variables" in url:
+            return _JsonResponse({"result": {"status": {"save_variables": {"variables": saved_variables()}}}})
         if "/machine/services/restart" in url:
             process["pid"] += 1
             return _JsonResponse({"result": "ok"})

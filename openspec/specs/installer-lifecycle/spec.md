@@ -80,6 +80,8 @@ The installer SHALL deploy firmware-scoped Klipper source only from validated pr
 - **AND** restart verification allows at least 60 seconds for Klipper to become ready under the replacement process identity
 - **AND** active, unknown, failed, or drifted activation remains pending and blocks unsafe continuation
 - **AND** every installer entrypoint resolves pending activation before further release work
+- **AND** a post-activation saved-variable mismatch retains its exact authorized expectations and blocks later install or automatic-update work until an exact live Moonraker verification succeeds; dry-run verification preserves the marker, and terminal uninstall removes it only after successful postflight while rollback preserves it
+
 
 ### Requirement: Non-owning QIDI Box reconciliation
 The installer SHALL keep an available QIDI Box usable without claiming ownership of vendor saved variables or silently replacing existing non-empty tool mappings.
@@ -93,7 +95,8 @@ The installer SHALL keep an available QIDI Box usable without claiming ownership
 #### Scenario: Automatic reconciliation preserves vendor state
 - **WHEN** noninteractive install or update observes Box topology while the printer is idle
 - **THEN** missing active mappings are created and existing non-empty mappings are preserved
-- **AND** busy or unknown printer state causes no reconciliation writes
+- **AND** busy, unavailable, or not-ready Klipper state causes no reconciliation writes
+- **AND** every write uses Klipper's live `SAVE_VARIABLE` command through Moonraker, verifies its live value and, when a source-patch restart occurs, verifies it again after the replacement process; it never restores a whole saved-variable file during rollback
 - **AND** saved-variable changes are excluded from installer ownership and uninstall
 
 ### Requirement: Default optimized preferences preserve operator values
@@ -101,7 +104,8 @@ The installer SHALL initialize absent optimized saved-variable preferences to re
 
 #### Scenario: Absent retention preference receives the installed default
 - **WHEN** install or update finds no `tltg_keep_loaded_between_prints` entry in Klipper saved variables
-- **THEN** it atomically saves value `1` within the recoverable install transaction
+- **THEN** it saves `1` through Moonraker only after Klipper is ready, verifies the live value and, when a source-patch restart occurs, verifies it again after the replacement process; existing `0` is preserved as an operator choice
+- **AND** install and upgrade repair missing defaults while idle; already-current automatic-update checks perform this repair only on enrolled printers
 - **AND** the preference remains outside the installed-state ownership ledger
 
 #### Scenario: Existing retention preference is preserved
