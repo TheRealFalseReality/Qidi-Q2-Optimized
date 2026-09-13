@@ -9,10 +9,58 @@ import tarfile
 import unittest
 from pathlib import Path
 
+from installer.runtime.cli import parse_args
+from installer.runtime.manifest import load_manifest
+from installer.runtime.config_transaction import (
+    FileChangePlan,
+    StaleConfigurationPreimageError,
+    apply_file_change_plan,
+)
+from installer.runtime.rollback import RollbackJournal
 from installer.tests.helpers import REPO_ROOT, temp_path
 
 
 SCRIPT = REPO_ROOT / "installer/release/install-latest.sh"
+
+
+class CliArgumentTests(unittest.TestCase):
+    def test_auto_update_actions_are_exclusive_and_mode_bound(self):
+        with self.assertRaises(SystemExit):
+            parse_args(["auto-update", "--run", "--enable-systemd"])
+        with self.assertRaises(SystemExit):
+            parse_args(["install", "--run"])
+        self.assertEqual(parse_args(["auto-update", "--run"]).mode, "auto-update-check")
+
+    def test_auto_update_launcher_accepts_global_version(self):
+        result = subprocess.run(
+            ["/bin/sh", str(REPO_ROOT / "installer/release/auto-update.sh"), "--version"],
+            text=True,
+            capture_output=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        version = load_manifest(REPO_ROOT / "installer/package.yaml").package.version
+        self.assertIn(version, result.stdout)
+
+
+class ConfigTransactionTests(unittest.TestCase):
+    def test_composes_edits_and_rejects_a_stale_preimage_before_overwrite(self):
+        root = temp_path("config-transaction-")
+        first = root / "first.cfg"
+        second = root / "second.cfg"
+        first.write_text("before\n", encoding="utf-8")
+        second.write_text("untouched\n", encoding="utf-8")
+        plan = FileChangePlan()
+        plan.replace_text(first, "first edit\n")
+        plan.replace_text(first, plan.text(first).replace("first", "composed"))
+        plan.replace_text(second, "second edit\n")
+        first.write_text("concurrent change\n", encoding="utf-8")
+        journal = RollbackJournal(root / "recovery")
+
+        with self.assertRaises(StaleConfigurationPreimageError):
+            apply_file_change_plan(plan.changes(), journal=journal)
+
+        self.assertEqual(first.read_text(encoding="utf-8"), "concurrent change\n")
+        self.assertEqual(second.read_text(encoding="utf-8"), "untouched\n")
 
 
 def _make_archive(root: Path, members: dict[str, bytes]) -> Path:

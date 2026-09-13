@@ -68,13 +68,6 @@ def bump_version(repo_root: Path, version: str, *, validate: bool = True) -> lis
 
     if _update_file(package_path, _update_package_yaml(package_path.read_text(encoding="utf-8"), version)):
         changed.append(str(PACKAGE_PATH))
-    if _update_file(
-        upgrade_sources_path,
-        _update_upgrade_sources(
-            upgrade_sources_path.read_text(encoding="utf-8"), version, manifest
-        ),
-    ):
-        changed.append(str(UPGRADE_SOURCES_PATH))
     if _update_file(globals_path, _update_globals(globals_path.read_text(encoding="utf-8"), version)):
         changed.append(str(GLOBALS_PATH))
 
@@ -122,35 +115,6 @@ def _update_package_yaml(text: str, version: str) -> str:
         return text
     insert_at = known_match.end(2)
     return text[:insert_at] + f'    - "{version}"\n' + text[insert_at:]
-
-
-def _update_upgrade_sources(text: str, version: str, manifest: Manifest) -> str:
-    if re.search(rf'(?m)^  "{re.escape(version)}":\n', text):
-        return text
-    separator = "" if text.endswith("\n\n") else "\n" if text.endswith("\n") else "\n\n"
-    return text + separator + _render_upgrade_source_block(version, manifest)
-
-
-def _render_upgrade_source_block(version: str, manifest: Manifest) -> str:
-    lines = [
-        f'  "{version}":',
-        f'    inherits: "{manifest.package.version}"',
-    ]
-    if manifest.install.source_patches:
-        lines.append("")
-        lines.append("    source_patches:")
-        for patch in manifest.install.source_patches:
-            for variant in patch.variants:
-                lines.extend(
-                    [
-                        f'      - id: "{patch.id}"',
-                        f'        destination: "{patch.destination}"',
-                        f'        firmware: "{variant.firmware}"',
-                        f'        original_sha256: "{variant.expected_sha256}"',
-                        f'        desired_sha256: "{variant.desired_sha256}"',
-                    ]
-                )
-    return "\n".join(lines) + "\n"
 
 
 def _update_globals(text: str, version: str) -> str:

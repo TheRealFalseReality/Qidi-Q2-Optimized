@@ -29,14 +29,7 @@ CONFIG_BACKUP_IGNORED_SYMLINK_PARTS = tuple(
 )
 BACKUP_TIMESTAMP_FORMAT = "%Y%m%dT%H%M%SZ"
 BACKUP_DISPLAY_TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S UTC"
-LEGACY_CONFIG_ONLY_PACKAGE_VERSIONS = frozenset({
-    "26.04.21.1", "26.04.27.1", "26.04.27.2", "26.04.27.3", "26.04.27.4",
-    "26.05.04.1", "26.05.19.1", "26.05.20.1", "26.05.21.1", "26.05.27.1",
-    "26.06.01.1", "26.06.02.1", "26.06.03.1", "26.06.04.1", "26.06.11.1",
-    "26.06.13.1", "26.06.15.1", "26.07.03.1", "26.07.03.2", "26.07.13.1",
-    "26.07.13.2",
-})
-_PACKAGE_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+\.\d+$")
+EXTERNAL_MANIFEST_INTRODUCTION_VERSION = (26, 7, 26, 1)
 
 
 class BackupArchiveError(ValueError):
@@ -186,27 +179,26 @@ def prune_installer_backups(
 
 
 def requires_external_backup_manifest(
-    *, package_version: str | None, state_declares_source_patches: bool
+    *,
+    package_version: str | None,
+    known_package_versions: tuple[str, ...],
+    state_declares_source_patches: bool,
 ) -> bool:
-    return (
-        state_declares_source_patches
-        or package_version is None
-        or package_version not in LEGACY_CONFIG_ONLY_PACKAGE_VERSIONS
-    )
+    if state_declares_source_patches:
+        return True
+    components = _package_version_components(package_version)
+    if package_version not in known_package_versions or components is None:
+        return True
+    return components >= EXTERNAL_MANIFEST_INTRODUCTION_VERSION
 
 
-def package_version_from_backup_label(label: str | None) -> str | None:
-    if not label:
+def _package_version_components(value: str | None) -> tuple[int, int, int, int] | None:
+    if not isinstance(value, str):
         return None
-    try:
-        _, package_version, timestamp = label.rsplit("-", 2)
-    except ValueError:
+    parts = value.split(".")
+    if len(parts) != 4 or any(not part.isdecimal() for part in parts):
         return None
-    if _parse_backup_timestamp(timestamp) is None or not _PACKAGE_VERSION_RE.fullmatch(package_version):
-        return None
-    return package_version
-
-
+    return tuple(int(part) for part in parts)  # type: ignore[return-value]
 def create_config_backup(
     *,
     printer_data_root: Path,

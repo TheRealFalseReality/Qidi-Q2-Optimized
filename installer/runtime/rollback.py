@@ -10,7 +10,7 @@ from .backup import (
     describe_snapshot_difference,
     load_backup_snapshot,
     load_external_backup_entries,
-    package_version_from_backup_label,
+    parse_installer_backup_archive,
     requires_external_backup_manifest,
     snapshot_runtime_tree,
 )
@@ -62,6 +62,7 @@ class RollbackJournal:
         self.file_snapshots: dict[Path, FileSnapshot] = {}
         self.tree_snapshots: dict[Path, TreeSnapshot] = {}
         self.write_started = False
+        self.committed = False
 
     @property
     def restore_target_path(self) -> Path | None:
@@ -71,6 +72,9 @@ class RollbackJournal:
 
     def note_write(self) -> None:
         self.write_started = True
+
+    def commit(self) -> None:
+        self.committed = True
 
     def track_file(self, path: Path) -> None:
         if path in self.file_snapshots or any(
@@ -115,7 +119,7 @@ class RollbackJournal:
 
     def rollback_or_raise(
         self,
-        original_error: Exception,
+        original_error: BaseException,
         *,
         backup_label: str | None,
         backup_zip_path: Path | None,
@@ -123,7 +127,7 @@ class RollbackJournal:
         failed_paths: list[str] = []
         try:
             self.rollback()
-        except Exception as rollback_error:  # pragma: no cover - exercised in integration tests
+        except BaseException as rollback_error:  # pragma: no cover - exercised in integration tests
             failed_paths.append(
                 str(getattr(rollback_error, "filename", None) or rollback_error)
             )
@@ -189,7 +193,7 @@ class RollbackJournal:
 
     def _write_recovery_sentinel(
         self,
-        original_error: Exception,
+        original_error: BaseException,
         backup_label: str | None,
         backup_zip_path: Path | None,
         failed_paths: list[str],
@@ -217,6 +221,8 @@ def clear_recovery_sentinel(
     source_directory: str = "config",
     external_root: Path | None = None,
     allowed_external_entries: dict[str, str] | None = None,
+    install_label_prefix: str | None = None,
+    known_package_versions: tuple[str, ...] | None = None,
 ) -> bool:
     if not path.exists():
         return False
@@ -246,10 +252,17 @@ def clear_recovery_sentinel(
         )
     if external_root is not None and allowed_external_entries is not None:
         try:
+            parsed = (
+                parse_installer_backup_archive(
+                    record.backup_zip_path,
+                    install_label_prefix=install_label_prefix,
+                )
+                if install_label_prefix is not None
+                else None
+            )
             require_manifest = requires_external_backup_manifest(
-                package_version=package_version_from_backup_label(
-                    record.backup_label or record.backup_zip_path.stem
-                ),
+                package_version=parsed.package_version if parsed is not None else None,
+                known_package_versions=known_package_versions or (),
                 state_declares_source_patches=_snapshot_declares_source_patches(
                     backup_snapshot
                 ),

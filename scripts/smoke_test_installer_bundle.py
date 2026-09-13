@@ -103,11 +103,9 @@ def main(argv: list[str] | None = None) -> int:
     if help_output.returncode != 0:
         raise SystemExit(help_output.stdout + help_output.stderr)
     for expected in (
-        f"QIDI Max 4 Optimized installer {package_version}",
-        "Usage: ./install.sh [options]",
+        "QIDI Max 4 Optimized installer runtime",
+        "{install,uninstall,clear-recovery-sentinel,restore-backup",
         "-v, --version",
-        "--uninstall",
-        "--clear-recovery-sentinel",
         "--plain",
         "--debug",
         "--dry-run",
@@ -127,7 +125,14 @@ def main(argv: list[str] | None = None) -> int:
     if version_output.stdout.strip() != f"QIDI Max 4 Optimized installer {package_version}":
         raise SystemExit("install.sh -v output did not match package.version")
 
-    with moonraker_server("standby") as url:
+    alias_dry_run = run_command(
+        [str(bundle_root / "install.sh"), "--uninstall", "--dry-run", "--plain"],
+        cwd=bundle_root,
+        env=build_env(prepare_printer_root(workspace / "alias-printer"), moonraker_url="http://moonraker.invalid"),
+    )
+    if alias_dry_run.returncode != 0 or "Nothing to uninstall." not in alias_dry_run.stdout:
+        raise SystemExit("install.sh --uninstall alias did not preserve no-op behavior")
+
         dry_run_install_printer_root = prepare_printer_root(workspace / "dry-run-install-printer")
         dry_run_install_env = build_env(dry_run_install_printer_root, moonraker_url=url)
         dry_run_install = run_command(
