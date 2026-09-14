@@ -8,10 +8,10 @@ M1002 R1
 M107
 CLEAR_PAUSE
 G29.0
-OPTIMIZED_PRINT_START_HOME BEDTEMP=[bed_temperature_initial_layer_single] CHAMBER=[chamber_temperature]
+OPTIMIZED_PRINT_START_HOME BEDTEMP=[bed_temperature_initial_layer_single] CHAMBER=[chamber_temperature] CHAMBER_MIN_TEMP={chamber_minimal_temperature[initial_tool]}
 
 ;===== BOX_PREPAR =====
-OPTIMIZED_START_PRINT_FILAMENT_PREP EXTRUDER=[initial_no_support_extruder] FIRSTLAYERTEMP=[nozzle_temperature_initial_layer] PURGETEMP={nozzle_temperature_range_high[initial_tool]} BEDTEMP=[bed_temperature_initial_layer_single] CHAMBER=[chamber_temperature]
+OPTIMIZED_START_PRINT_FILAMENT_PREP EXTRUDER=[initial_no_support_extruder] FIRSTLAYERTEMP=[nozzle_temperature_initial_layer] PURGETEMP={nozzle_temperature_range_high[initial_tool]} BEDTEMP=[bed_temperature_initial_layer_single] CHAMBER=[chamber_temperature] CHAMBER_MIN_TEMP={chamber_minimal_temperature[initial_tool]}
 
 ;===== PRINT_START =====
 ; Turn on Polar cooler, comment out if you don't want this

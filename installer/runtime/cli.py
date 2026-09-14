@@ -58,7 +58,14 @@ def main(
     bundle_root: Path | None = None,
     environ: dict[str, str] | None = None,
 ) -> int:
+    if argv in (["--version"], ["-v"]):
+        root = bundle_root or Path(__file__).resolve().parents[2]
+        print(installer_version(root), file=stream or sys.stdout)
+        return 0
     args = parse_args(argv)
+    if args.show_version:
+        print(installer_version(bundle_root or Path(__file__).resolve().parents[2]), file=stream or sys.stdout)
+        return 0
     env = dict(os.environ if environ is None else environ)
     bundle_root = bundle_root or Path(__file__).resolve().parents[2]
     reporter = create_reporter(
@@ -249,6 +256,8 @@ def main(
                         patch.id: patch.destination
                         for patch in manifest.install.source_patches
                     },
+                    install_label_prefix=manifest.backup.label_prefix,
+                    known_package_versions=manifest.package.known_versions,
                 )
                 reporter.emit_clear_recovery_sentinel(removed)
                 reporter.debug(
@@ -475,12 +484,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "uninstall",
             "clear-recovery-sentinel",
             "restore-backup",
+            "auto-update",
             "auto-update-check",
             "enable-auto-updates",
             "disable-auto-updates",
             "complete-host-reboot",
         ],
     )
+    parser.add_argument("-v", "--version", dest="show_version", action="store_true", help="Show the installer package version and exit.")
     parser.add_argument("--plain", action="store_true", help="Use plain text output instead of the rich terminal UI.")
     parser.add_argument("--debug", action="store_true", help="Print debug events and tracebacks on failure.")
     parser.add_argument("--dry-run", action="store_true", help="Preview install or uninstall actions without writing changes.")
@@ -492,7 +503,32 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--keep-ai-detection", action="store_true", help="Keep the QIDI AI detection backend service enabled when system optimizations run.")
     parser.add_argument("--keep-system-optimizations", action="store_true", help="During uninstall, leave installer-managed system settings in place.")
     parser.add_argument("--reboot-host", action="store_true", help="Authorize a pending managed host OS reboot after successful install or uninstall.")
-    args = parser.parse_args(argv)
+    parser.add_argument("--uninstall", action="store_true", help="Compatibility alias for the uninstall mode.")
+    parser.add_argument("--clear-recovery-sentinel", action="store_true", help="Compatibility alias for the clear-recovery-sentinel mode.")
+    auto_update_actions = parser.add_mutually_exclusive_group()
+    auto_update_actions.add_argument("--run", dest="auto_update_action", action="store_const", const="run", help="Run an automatic-update check (auto-update mode only).")
+    auto_update_actions.add_argument("--enable-systemd", dest="auto_update_action", action="store_const", const="enable-systemd", help="Enable automatic-update systemd units (auto-update mode only).")
+    auto_update_actions.add_argument("--disable-systemd", dest="auto_update_action", action="store_const", const="disable-systemd", help="Disable automatic-update systemd units (auto-update mode only).")
+    args = parser.parse_args(_normalize_command_aliases(argv))
+    if args.uninstall:
+        if args.mode != "install":
+            parser.error("--uninstall cannot be combined with another mode.")
+        args.mode = "uninstall"
+    if args.clear_recovery_sentinel:
+        if args.mode != "install" or args.uninstall:
+            parser.error("--clear-recovery-sentinel cannot be combined with another mode.")
+        args.mode = "clear-recovery-sentinel"
+    if args.auto_update_action and args.mode != "auto-update":
+        parser.error("auto-update action flags are only supported with auto-update.")
+    if args.mode == "auto-update":
+        if args.auto_update_action == "run":
+            args.mode = "auto-update-check"
+        elif args.auto_update_action == "enable-systemd":
+            args.mode = "enable-auto-updates"
+        elif args.auto_update_action == "disable-systemd":
+            args.mode = "disable-auto-updates"
+        else:
+            parser.error("auto-update requires --run, --enable-systemd, or --disable-systemd.")
     if args.dry_run and args.mode not in {"install", "uninstall"}:
         parser.error("--dry-run is only supported with install and uninstall.")
     if args.demo_tui and args.mode not in {"install", "uninstall"}:
@@ -515,6 +551,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("--reboot-host is only supported with install and uninstall.")
     return args
 
+def _normalize_command_aliases(argv: list[str] | None) -> list[str] | None:
+    if argv is None:
+        return None
+    aliases = {"--uninstall", "--clear-recovery-sentinel"}
+    values = list(argv)
+    if values and values[0] in aliases:
+        return ["install", values[0], *values[1:]]
+    return values
+
+
+def installer_version(bundle_root: Path) -> str:
+    manifest = load_manifest(bundle_root / "installer/package.yaml")
+    return f"QIDI Max 4 Optimized installer {manifest.package.version}"
 
 
 def _system_options_from_args(args: argparse.Namespace) -> SystemOptimizationCliOptions:

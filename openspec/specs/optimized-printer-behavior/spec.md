@@ -89,6 +89,31 @@ OrcaSlicer and QIDI Studio packs SHALL implement the same functional print-start
 - **THEN** the prime line uses available room ahead of first-layer bounds or a fixed safe fallback
 - **AND** nozzle-temperature Z compensation is applied from a known absolute reference after mesh and offset application
 
+### Requirement: Optional minimum chamber startup temperature
+Optimized print start SHALL accept a chamber startup minimum independently of the chamber heating target, with compatible slicer G-code for OrcaSlicer 2.4.2 and later.
+
+#### Scenario: Positive minimum releases startup while heating continues
+- **WHEN** OrcaSlicer start G-code supplies a positive minimum from the initial tool's filament profile
+- **THEN** retained Box filament, fresh Box filament, and external-spool starts wait for that exact minimum before leveling
+- **AND** the minimum is capped at the requested chamber target
+- **AND** chamber heating retains the requested target throughout subsequent leveling and printing without another full-target wait
+- **AND** a zero chamber target or unavailable chamber heater causes no chamber wait
+
+#### Scenario: Independent slicer and macro updates preserve startup
+- **WHEN** the minimum is omitted or zero
+- **THEN** updated macros preserve the existing chamber startup wait threshold of target minus 3 degrees, bounded at zero
+- **AND** existing sliced files and QIDI Studio starts retain their established behavior
+
+#### Scenario: Updated slicer G-code remains usable with older macros
+- **WHEN** updated OrcaSlicer start G-code runs against older optimized macros
+- **THEN** the optional minimum parameter is ignored and the established chamber wait remains active
+
+#### Scenario: Minimum applies to staggered heating
+- **WHEN** staggered heating is enabled and target-bearing start G-code supplies a positive chamber minimum
+- **THEN** the chamber stage waits for the minimum before its configured dwell and nozzle activation
+- **AND** subsequent filament preparation uses the same minimum rather than waiting for the full target
+- **AND** prior no-argument starts preserve their active-target heating behavior
+
 ### Requirement: Filament and QIDI Box state lifecycle
 Optimized macros SHALL keep external-spool runout policy independent from vendor Box recovery, retain filament only when the saved preference equals `1` and physical Box state is provable, and normalize tool mappings only at safe lifecycle boundaries.
 
@@ -133,13 +158,37 @@ Optimized macros SHALL keep external-spool runout policy independent from vendor
 - **AND** manual mapping reset is permitted only while the printer is idle
 
 ### Requirement: Safe print transitions and helpers
-Optimized cut, purge, cooldown, cleaning, calibration, and cancellation helpers SHALL preserve caller state, guard optional hardware, and avoid delayed or error-path actions that can affect a subsequent print.
+Optimized cut, purge, cooldown, cleaning, calibration, and cancellation helpers SHALL preserve caller state, guard optional hardware, and avoid delayed or error-path actions that can affect a subsequent print. Print-start cleaning SHALL preserve staged cooldown wiping with mixed-speed pre-scrape motion and use fast finishing after the cooled rear-bed scrape, with detailed motion and branch ordering controlled by `openspec/contracts/gcode-paths/start-print.path.json`.
 
 #### Scenario: Cut and cleanup preserve caller state
 - **WHEN** optimized cut, purge, chute, chamber, or Box-heater helpers run
 - **THEN** motion modes, extrusion modes, and temporary acceleration are restored
 - **AND** optional Box objects are called only when available and valid
 - **AND** fixed waits are reduced without replacing required motion completion waits
+
+#### Scenario: Pre-scrape wiping retains the cooldown stages
+- **WHEN** a fresh Box or external-spool start reaches an existing guarded pre-scrape chute wipe
+- **THEN** each wipe uses two broad alternating-speed cycles followed by three finishing cycles at commanded 100 mm/s
+- **AND** existing repeated cooldown wipe stages, temperature thresholds, conditional execution, purge quantities, and waste-release positioning are preserved rather than collapsed into one wipe
+- **AND** the existing cooled rectangular rear-bed scrape is followed by three small circles with its cable-chain orientation and temperature safety gate intact
+
+#### Scenario: Cooled scraping finishes with fast chute wiping
+- **WHEN** a fresh Box or external-spool start completes its rear-bed scrape and guarded chute cleanup is available
+- **THEN** the nozzle lifts clear and returns safely to the chute before performing four back-and-forth finishing cycles at commanded 200 mm/s
+- **AND** waste-release positioning completes before leveling
+- **AND** unavailable vendor cleanup objects are not called
+
+#### Scenario: Optimized cleanup uses fast non-extruding silicone wipes
+- **WHEN** retained-filament startup, non-start purge cleanup, unload cleanup, or staged end cleanup reaches an existing silicone-wiper pass
+- **THEN** it retains four back-and-forth finishing cycles at commanded 200 mm/s and its existing exit motion
+- **AND** no mixed-speed pre-scrape pattern is substituted into these unrelated cleanup paths
+
+#### Scenario: Wipe motion preserves state and unrelated cleanup
+- **WHEN** either optimized wipe pattern executes with the nozzle already positioned at the rear wiper
+- **THEN** it preserves caller motion and extrusion modes, feed settings, and acceleration
+- **AND** the wipe itself performs no extrusion, Y/Z repositioning, heater changes, fixed dwell, or bed scraping
+- **AND** retained-filament startup, non-start purge cleanup, manual loading, unload cleanup, staged end cleanup, vendor cleanup commands, and slicer filament-change sequences retain their existing behavior
+- **AND** retained-filament startup does not gain a rear-bed scrape or post-scrape sequence
 
 #### Scenario: End-print performs staged cooldown safely
 - **WHEN** normal slicer end G-code runs
@@ -171,6 +220,14 @@ Optimized configuration SHALL preserve firmware-scoped peripheral ownership, sto
 - **THEN** the guarded polling interval declared by the package retains sampling margin above measured fan speed
 - **AND** fan output, RPM reporting, and zero-RPM shutdown behavior remain unchanged
 - **AND** uninstall restores the owned firmware preimage while preserving user drift
+
+#### Scenario: Electronics temperatures are exposed without modifying Fluidd
+- **WHEN** optimized configuration is installed
+- **THEN** Moonraker and Fluidd receive temperature sensors named `AP_Board_SOC`, `Toolhead_MCU`, and `Mainboard_MCU`
+- **AND** the AP-board sensor reads the Linux SoC thermal zone
+- **AND** the toolhead sensor reads the THR MCU internal sensor
+- **AND** the confirmed GD32F425 mainboard uses the datasheet's uncalibrated typical conversion instead of Klipper's incompatible STM32F407 calibration path
+- **AND** the approximate mainboard sensor is observational and uses broad bounds so normal readings do not trigger a machine shutdown
 
 #### Scenario: Stock integration surfaces remain intact
 - **WHEN** optimized configuration is installed

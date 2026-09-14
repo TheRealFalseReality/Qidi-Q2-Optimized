@@ -16,6 +16,29 @@ class OptimizedMacroContractTests(unittest.TestCase):
         if duplicates:
             self.fail("Optimized macro duplicate definitions are invalid for this test.")
 
+    def test_electronics_temperatures_are_exposed_with_gd32_mainboard_conversion(self):
+        temperatures = (OPTIMIZED_MACRO_ROOT / "temperatures.cfg").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("[temperature_sensor AP_Board_SOC]", temperatures)
+        self.assertIn("sensor_type: temperature_host", temperatures)
+        self.assertIn(
+            "sensor_path: /sys/class/thermal/thermal_zone0/temp", temperatures
+        )
+        self.assertIn("[temperature_sensor Toolhead_MCU]", temperatures)
+        self.assertIn("sensor_type: temperature_mcu", temperatures)
+        self.assertIn("sensor_mcu: THR", temperatures)
+        self.assertIn("[adc_temperature GD32F425]", temperatures)
+        self.assertIn("temperature1: 0\nvoltage1: 1.5100", temperatures)
+        self.assertIn("temperature2: 100\nvoltage2: 1.0700", temperatures)
+        self.assertIn("[temperature_sensor Mainboard_MCU]", temperatures)
+        self.assertIn("sensor_type: GD32F425", temperatures)
+        self.assertIn("sensor_pin: ADC_TEMPERATURE", temperatures)
+        self.assertIn("min_temp: -100\nmax_temp: 500", temperatures)
+        self.assertNotIn("sensor_mcu: mcu", temperatures)
+        self.assertNotIn("[temperature_sensor Mainboard_GD32F425]", temperatures)
+        self.assertNotIn("[temperature_sensor Mainboard_MCU_Approx]", temperatures)
+
     def test_user_helper_macros_are_available(self):
         helpers = (OPTIMIZED_MACRO_ROOT / "helpers.cfg").read_text(encoding="utf-8")
         self.assertIn("[screws_tilt_adjust]", helpers)
@@ -274,7 +297,7 @@ class OptimizedMacroContractTests(unittest.TestCase):
 
     def test_slicer_start_keeps_mesh_selection_printer_side(self):
         expected_calls = {
-            "orcaslicer_gcode/start.gcode": "OPTIMIZED_START_PRINT_FILAMENT_PREP EXTRUDER=[initial_no_support_extruder] FIRSTLAYERTEMP=[nozzle_temperature_initial_layer] PURGETEMP={nozzle_temperature_range_high[initial_tool]} BEDTEMP=[bed_temperature_initial_layer_single] CHAMBER=[chamber_temperature]",
+            "orcaslicer_gcode/start.gcode": "OPTIMIZED_START_PRINT_FILAMENT_PREP EXTRUDER=[initial_no_support_extruder] FIRSTLAYERTEMP=[nozzle_temperature_initial_layer] PURGETEMP={nozzle_temperature_range_high[initial_tool]} BEDTEMP=[bed_temperature_initial_layer_single] CHAMBER=[chamber_temperature] CHAMBER_MIN_TEMP={chamber_minimal_temperature[initial_tool]}",
             "qidistudio_gcode/start.gcode": "OPTIMIZED_START_PRINT_FILAMENT_PREP EXTRUDER=[initial_no_support_extruder] FIRSTLAYERTEMP=[nozzle_temperature_initial_layer] PURGETEMP={nozzle_temperature_range_high[initial_tool]} BEDTEMP=[bed_temperature_initial_layer_single] CHAMBER=[chamber_temperatures]",
         }
         for relative_path, expected_call in expected_calls.items():
@@ -474,10 +497,10 @@ class OptimizedMacroContractTests(unittest.TestCase):
         self.assert_ordered(
             staged_wipe,
             "TEMPERATURE_WAIT SENSOR={extruder} MAXIMUM={first_wipe_temp}",
-            "CLEAR_OOZE",
+            "_OPTIMIZED_WIPE_NOZZLE",
             "CLEAR_FLUSH",
             "TEMPERATURE_WAIT SENSOR={extruder} MAXIMUM={final_wipe_temp}",
-            "CLEAR_OOZE",
+            "_OPTIMIZED_WIPE_NOZZLE",
             "CLEAR_FLUSH",
             "G1 Y-{pull_forward_y} F6000",
         )
@@ -502,9 +525,9 @@ class OptimizedMacroContractTests(unittest.TestCase):
             "G1 Z20 F480",
             "OPTIMIZED_MOVE_TO_TRASH",
             "OPTIMIZED_WAIT_BED S={bed_target} STATUS=wait_bed_temp",
-            "OPTIMIZED_WAIT_CHAMBER S={chamber_target} STATUS=wait_chamber_temp",
+            "OPTIMIZED_WAIT_CHAMBER S={chamber_target} STATUS=wait_chamber_temp MINIMUM={params.CHAMBER_MIN_TEMP|default(0)|float}",
             "OPTIMIZED_WAIT_HOTEND S={reuse_nozzle_target} STATUS=clear_nozzle",
-            "CLEAR_OOZE",
+            "_OPTIMIZED_WIPE_NOZZLE",
             "CLEAR_FLUSH",
             "Z_TILT_ADJUST",
         )
@@ -522,13 +545,7 @@ class OptimizedMacroContractTests(unittest.TestCase):
         for branch in start_gcode.split("Z_TILT_ADJUST")[:-1]:
             self.assertTrue(branch.rstrip().endswith("_OPTIMIZED_REPORT_BED_TEMP"))
 
-    def test_chamber_wait_accepts_three_degree_startup_window(self):
-        chamber_gcode = self._macro_gcode("OPTIMIZED_WAIT_CHAMBER")
-        self.assertIn('TEMPERATURE_WAIT SENSOR="heater_generic chamber" MINIMUM={([target - 3, 0]|max)}', chamber_gcode)
-        self.assertNotIn("target, 65", chamber_gcode)
-
-
-    def test_rear_bed_scrape_orients_cable_chain_and_uses_stock_coordinates(self):
+    def test_print_start_cleaning_preserves_stages_geometry_and_caller_boundaries(self):
         globals_text = (OPTIMIZED_MACRO_ROOT / "globals.cfg").read_text(encoding="utf-8")
         self.assertIn("variable_trash_final_approach_speed_xy: 3500", globals_text)
         self.assertIn("variable_rear_scrape_orient_speed_xy: 24000", globals_text)
@@ -536,6 +553,42 @@ class OptimizedMacroContractTests(unittest.TestCase):
         move_to_trash = self._macro_gcode("OPTIMIZED_MOVE_TO_TRASH")
         self.assertEqual(move_to_trash.count("F{opt.trash_final_approach_speed_xy}"), 4)
         self.assertNotIn("F3500", move_to_trash)
+
+        mixed_wipe = self._macro_gcode("_OPTIMIZED_START_PRE_SCRAPE_WIPE")
+        self.assert_ordered(
+            mixed_wipe,
+            "saved_accel = printer.toolhead.max_accel|float",
+            "SAVE_GCODE_STATE NAME=optimized_start_pre_scrape_wipe_state",
+            "G90",
+            "M204 S10000",
+            "{% for i in range(2) %}",
+            "G1 X163 F8000",
+            "G1 X145 F5000",
+            "{% endfor %}",
+            "{% for i in range(3) %}",
+            "G1 X175 F6000",
+            "G1 X163 F6000",
+            "{% endfor %}",
+            "M400",
+            "SET_VELOCITY_LIMIT ACCEL={saved_accel}",
+            "RESTORE_GCODE_STATE NAME=optimized_start_pre_scrape_wipe_state",
+        )
+        for forbidden in ("G1 E", "G1 Y", "G1 Z", "M104", "M109", "G4 "):
+            self.assertNotIn(forbidden, mixed_wipe)
+
+        fast_wipe = self._macro_gcode("_OPTIMIZED_WIPE_NOZZLE")
+        self.assert_ordered(
+            fast_wipe,
+            "SAVE_GCODE_STATE NAME=optimized_wipe_nozzle_state",
+            "{% for i in range(4) %}",
+            "G1 X176 F12000",
+            "G1 X163 F12000",
+            "{% endfor %}",
+            "G1 X180 F12000",
+            "SET_VELOCITY_LIMIT ACCEL={saved_accel}",
+            "RESTORE_GCODE_STATE NAME=optimized_wipe_nozzle_state",
+        )
+        self.assertNotIn("_OPTIMIZED_START_PRE_SCRAPE_WIPE", fast_wipe)
 
         scrape = self._macro_gcode("_OPTIMIZED_REAR_BED_SCRAPE")
         self.assertIn("saved_accel = printer.toolhead.max_accel|float", scrape)
@@ -553,24 +606,98 @@ class OptimizedMacroContractTests(unittest.TestCase):
             "G1 X-15",
             "G1 Y-2",
             "G1 X15",
+            "G90",
+            "G2 I0.5 J0.5 F480",
+            "G2 I0.5 J0.5",
+            "G2 I0.5 J0.5",
             "G1 Z10",
             "G1 Y383 F12000",
             "SET_VELOCITY_LIMIT ACCEL={saved_accel}",
         )
+        self.assertEqual(scrape.count("G2 I0.5 J0.5"), 3)
         self.assertNotIn("G1 Y392 F{opt.trash_final_approach_speed_xy}", scrape)
         self.assertNotIn("G1 Y-3", scrape)
 
-        wipe = self._macro_gcode("OPTIMIZED_WIPE_AND_SCRAPE_NOZZLE")
-        start = self._macro_gcode("OPTIMIZED_START_PRINT_FILAMENT_PREP")
-        self.assertEqual(wipe.count("_OPTIMIZED_REAR_BED_SCRAPE"), 1)
-        self.assertEqual(start.count("_OPTIMIZED_REAR_BED_SCRAPE"), 1)
-        self.assertNotIn("G1 Z-0.2 F480", wipe)
-        self.assertEqual(start.count("G1 Z-0.2 F480"), 0)
-
-    def test_no_box_start_path_wipes_and_scrapes_without_rear_purge(self):
         start_gcode = self._macro_gcode("OPTIMIZED_START_PRINT_FILAMENT_PREP")
-        no_box_gcode = start_gcode[start_gcode.index("M118 Starting without QIDI Box filament prep") :]
-        self.assertIn("OPTIMIZED_WIPE_AND_SCRAPE_NOZZLE TARGET={scrape_target}", no_box_gcode)
+        box_gcode = start_gcode[
+            start_gcode.index("{% elif box_enabled %}") : start_gcode.index(
+                "M118 Starting without QIDI Box filament prep"
+            )
+        ]
+        self.assert_ordered(
+            box_gcode,
+            "BOX_PRINT_START EXTRUDER={tool} HOTENDTEMP={purge_temp}",
+            "OPTIMIZED_EXTRUSION_AND_FLUSH PURGETEMP={purge_temp} CHAMBER={chamber_target} PRE_SCRAPE=1",
+            "{% if purge_temp > scrape_target %}",
+            "TEMPERATURE_WAIT SENSOR=extruder MAXIMUM={purge_temp}",
+            "_OPTIMIZED_START_PRE_SCRAPE_WIPE",
+            "{% if purge_temp - 30 > scrape_target %}",
+            "TEMPERATURE_WAIT SENSOR=extruder MAXIMUM={purge_temp - 30}",
+            "_OPTIMIZED_START_PRE_SCRAPE_WIPE",
+            "TEMPERATURE_WAIT SENSOR=extruder MAXIMUM={scrape_maximum}",
+            "_OPTIMIZED_START_PRE_SCRAPE_WIPE",
+            "_OPTIMIZED_REAR_BED_SCRAPE",
+            "_OPTIMIZED_FINISH_START_SCRAPE",
+            "OPTIMIZED_WAIT_BED S={bed_target} STATUS=wait_bed_temp",
+            "Z_TILT_ADJUST",
+        )
+        self.assertEqual(box_gcode.count("_OPTIMIZED_START_PRE_SCRAPE_WIPE"), 3)
+        self.assertEqual(box_gcode.count("{% if purge_temp > scrape_target %}"), 1)
+        self.assertEqual(box_gcode.count("{% if purge_temp - 30 > scrape_target %}"), 1)
+        self.assertNotIn("G1 E250", box_gcode)
+
+        retained_gcode = start_gcode[
+            start_gcode.index("{% if reuse_loaded %}") : start_gcode.index(
+                "{% elif box_enabled %}"
+            )
+        ]
+        self.assertIn("_OPTIMIZED_WIPE_NOZZLE", retained_gcode)
+        for forbidden in (
+            "_OPTIMIZED_START_PRE_SCRAPE_WIPE",
+            "_OPTIMIZED_REAR_BED_SCRAPE",
+            "_OPTIMIZED_FINISH_START_SCRAPE",
+        ):
+            self.assertNotIn(forbidden, retained_gcode)
+
+        purge = self._macro_gcode("OPTIMIZED_EXTRUSION_AND_FLUSH")
+        self.assertIn("pre_scrape = params.PRE_SCRAPE|default(0)|int == 1", purge)
+        self.assert_ordered(
+            purge,
+            "{% if pre_scrape %}",
+            "_OPTIMIZED_START_PRE_SCRAPE_WIPE",
+            "{% else %}",
+            "_OPTIMIZED_WIPE_NOZZLE",
+            "{% endif %}",
+            "CLEAR_FLUSH",
+        )
+        self.assertIn("G1 E10 F300", purge)
+        self.assertIn("{% for i in range(1,3) %}", purge)
+        self.assertIn("G1 E60 F300", purge)
+
+        for unchanged_caller in (
+            "OPTIMIZED_UNLOAD_FILAMENT",
+            "OPTIMIZED_END_STAGED_NOZZLE_WIPE",
+        ):
+            caller = self._macro_gcode(unchanged_caller)
+            self.assertIn("_OPTIMIZED_WIPE_NOZZLE", caller)
+            self.assertNotIn("_OPTIMIZED_START_PRE_SCRAPE_WIPE", caller)
+        for slicer_change in (
+            "orcaslicer_gcode/change_filament.gcode",
+            "qidistudio_gcode/change_filament.gcode",
+        ):
+            self.assertNotIn(
+                "_OPTIMIZED_START_PRE_SCRAPE_WIPE",
+                (REPO_ROOT / slicer_change).read_text(encoding="utf-8"),
+            )
+
+    def test_external_spool_start_guards_optional_cleanup_and_finishes_before_leveling(self):
+        start_gcode = self._macro_gcode("OPTIMIZED_START_PRINT_FILAMENT_PREP")
+        no_box_gcode = start_gcode[
+            start_gcode.index("M118 Starting without QIDI Box filament prep") :
+        ]
+        self.assertIn(
+            "OPTIMIZED_WIPE_AND_SCRAPE_NOZZLE TARGET={scrape_target}", no_box_gcode
+        )
         self.assertNotIn("CLEAR_NOZZLE", no_box_gcode)
         self.assert_ordered(
             no_box_gcode,
@@ -581,13 +708,37 @@ class OptimizedMacroContractTests(unittest.TestCase):
         )
         self.assertNotIn("BED_MESH_CALIBRATE", no_box_gcode)
 
-        wipe_gcode = self._macro_gcode("OPTIMIZED_WIPE_AND_SCRAPE_NOZZLE")
-        self.assertNotIn("G1 E", wipe_gcode)
-        self.assertNotIn("_OPTIMIZED_HOME_Z_FROM_SAFE_POINT", wipe_gcode)
-        self.assertNotIn("_OPTIMIZED_HOME_Z_FROM_SAFE_POINT_RAW", wipe_gcode)
-        self.assertIn("OPTIMIZED_WAIT_HOTEND S={scrape_target} STATUS=clear_nozzle", wipe_gcode)
-        self.assertIn("_OPTIMIZED_REAR_BED_SCRAPE", wipe_gcode)
-        self.assertNotIn("G1 Z-0.2 F480", wipe_gcode)
+        cleanup = self._macro_gcode("OPTIMIZED_WIPE_AND_SCRAPE_NOZZLE")
+        self.assertNotIn("G1 E", cleanup)
+        self.assertNotIn("_OPTIMIZED_HOME_Z_FROM_SAFE_POINT", cleanup)
+        self.assertNotIn("_OPTIMIZED_HOME_Z_FROM_SAFE_POINT_RAW", cleanup)
+        self.assert_ordered(
+            cleanup,
+            'box_available = printer["box_extras"] is defined',
+            "OPTIMIZED_WAIT_HOTEND S={scrape_target} STATUS=clear_nozzle",
+            "TEMPERATURE_WAIT SENSOR={printer.toolhead.extruder} MAXIMUM={scrape_maximum}",
+            "{% if box_available %}",
+            "_OPTIMIZED_START_PRE_SCRAPE_WIPE",
+            "CLEAR_FLUSH",
+            "{% endif %}",
+            "_OPTIMIZED_REAR_BED_SCRAPE",
+            "_OPTIMIZED_FINISH_START_SCRAPE",
+        )
+        self.assertNotIn("_OPTIMIZED_WIPE_NOZZLE", cleanup)
+
+        finish = self._macro_gcode("_OPTIMIZED_FINISH_START_SCRAPE")
+        self.assert_ordered(
+            finish,
+            'box_available = printer["box_extras"] is defined',
+            "{% if box_available %}",
+            "OPTIMIZED_MOVE_TO_TRASH",
+            "_OPTIMIZED_WIPE_NOZZLE",
+            "CLEAR_FLUSH",
+            "{% endif %}",
+        )
+        self.assertEqual(finish.count("CLEAR_FLUSH"), 1)
+        self.assertNotIn("CLEAR_NOZZLE", finish)
+        self.assertNotIn("CLEAR_OOZE", finish)
 
     def assert_ordered(self, text: str, *needles: str):
         position = -1

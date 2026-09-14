@@ -5,6 +5,7 @@ import json
 import shutil
 import tempfile
 import threading
+from subprocess import CompletedProcess
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -78,6 +79,121 @@ def build_env(printer_data_root: Path, *, moonraker_url: str) -> dict[str, str]:
 
 
 
+def fake_system_root() -> Path:
+    root = temp_path("system-optimization-flow-")
+    (root / "etc/resolvconf/resolv.conf.d").mkdir(parents=True)
+    (root / "etc/resolv.conf").write_text("nameserver 114.114.114.114\n", encoding="utf-8")
+    (root / "etc/resolvconf/resolv.conf.d/head").write_text("nameserver 8.8.8.8\n", encoding="utf-8")
+    (root / "etc/resolvconf/resolv.conf.d/tail").write_text("", encoding="utf-8")
+    (root / "etc/apt").mkdir(parents=True)
+    (root / "etc/apt/sources.list").write_text("old apt\n", encoding="utf-8")
+    unit = root / "lib/systemd/system/rockchip.service"
+    unit.parent.mkdir(parents=True)
+    unit.write_text("[Service]\nExecStart=/etc/init.d/rockchip.sh\n", encoding="utf-8")
+    script = root / "etc/init.d/rockchip.sh"
+    script.parent.mkdir(parents=True)
+    script.write_text(
+        "#!/bin/bash -e\n"
+        "rk3308\n"
+        "CHIPNAME=\"rk3208\"\n"
+        "mount -o remount,sync /\n"
+        "install_packages\n"
+        "touch /usr/local/first_boot_flag\n",
+        encoding="utf-8",
+    )
+    gif = root / "home/qidi/QIDI_Client/access/account/process.gif"
+    gif.parent.mkdir(parents=True)
+    gif.write_bytes(b"old")
+    (root / "systemd").mkdir()
+    for service in ("xl2tpd", "bluetooth", "algo_app.service"):
+        (root / "systemd" / f"{service}.json").write_text(
+            json.dumps({"exists": True, "service": service, "enabled": "enabled", "active": "active"}, sort_keys=True),
+            encoding="utf-8",
+        )
+    (root / "mounts").mkdir()
+    (root / "mounts/root.options").write_text("rw,relatime,sync\n", encoding="utf-8")
+    return root
+
+
+def fake_host_run(root: Path):
+    """Bounded command fixture for systemd and root-mount interactions."""
+    def service_state(service: str) -> dict:
+        path = root / "systemd" / f"{service}.json"
+        if not path.exists():
+            return {"exists": True, "service": service, "enabled": "enabled", "active": "active"}
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def write_service_state(service: str, state: dict) -> None:
+        path = root / "systemd" / f"{service}.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
+
+    def result(command, *, stdout="", returncode=0):
+        return CompletedProcess(command, returncode, stdout=stdout)
+
+    def run(command, **_kwargs):
+        command = list(command)
+        if command[:4] == ["sudo", "-S", "-p", ""]:
+            command = command[4:]
+        if command == ["-v"]:
+            return result(command)
+        if command[:2] == ["systemctl", "is-enabled"]:
+            state = service_state(command[2])
+            return result(command, stdout=f"{state['enabled']}\n")
+        if command[:2] == ["systemctl", "is-active"]:
+            state = service_state(command[2])
+            return result(command, stdout=f"{state['active']}\n")
+        if command[:2] == ["systemctl", "show"]:
+            service = command[2]
+            state = service_state(service)
+            prop = next((item.split("=", 1)[1] for item in command if item.startswith("--property=")), "")
+            if prop == "ExecStart":
+                dropin = root / "etc/systemd/system/rockchip.service.d/override.conf"
+                source = dropin if dropin.is_file() else root / "lib/systemd/system/rockchip.service"
+                values = [line.split("=", 1)[1].strip() for line in source.read_text(encoding="utf-8").splitlines() if line.strip().startswith("ExecStart=")]
+                return result(command, stdout=(values[-1] if values else "") + "\n")
+            values = {"ActiveState": state.get("active", "unknown"), "SubState": state.get("sub", "dead"), "Result": state.get("result", "success"), "ExecMainStatus": str(state.get("exec_main_status", 0))}
+            return result(command, stdout=values[prop] + "\n")
+        if command[:1] == ["findmnt"]:
+            return result(command, stdout=(root / "mounts/root.options").read_text(encoding="utf-8"))
+        if command[:2] == ["systemctl", "disable"]:
+            service = command[-1]
+            state = service_state(service)
+            state.update({"enabled": "disabled", "active": "inactive"})
+            write_service_state(service, state)
+            return result(command)
+        if command[:2] == ["systemctl", "enable"]:
+            service = command[-1]
+            state = service_state(service)
+            state["enabled"] = "enabled"
+            write_service_state(service, state)
+            return result(command)
+        if command[:2] in (["systemctl", "start"], ["systemctl", "stop"]):
+            service = command[-1]
+            state = service_state(service)
+            state["active"] = "active" if command[1] == "start" else "inactive"
+            write_service_state(service, state)
+            return result(command)
+        if command[:2] == ["systemctl", "restart"]:
+            return result(command)
+        if command[:2] == ["systemctl", "daemon-reload"] or command[:2] == ["systemctl", "reset-failed"]:
+            return result(command)
+        if command[:1] == ["mount"]:
+            options = command[command.index("-o") + 1].split(",")
+            (root / "mounts/root.options").write_text(
+                ",".join(item for item in options if item not in {"remount", "sync", "async"})
+                + (",async" if "async" in options else ",sync" if "sync" in options else "")
+                + "\n",
+                encoding="utf-8",
+            )
+            return result(command)
+        if command and command[0].startswith("/etc/init.d/"):
+            return result(command)
+        raise AssertionError(f"Unexpected host command: {command}")
+
+    return run
+
+
 def snapshot_tree(root: Path) -> dict[str, bytes]:
     snapshot: dict[str, bytes] = {}
     if not root.exists():
@@ -102,14 +218,57 @@ class _JsonResponse:
         return self._body
 
 
-def moonraker_urlopen(state: str | None = "standby", *, raw_payload=None):
+def moonraker_urlopen(
+    state: str | None = "standby", *, raw_payload=None, saved_variables_path: Path | None = None
+):
     payload = raw_payload
     if payload is None:
         payload = {"result": {"status": {"print_stats": {"state": state}}}}
     process = {"pid": 100}
 
+    def saved_variables():
+        if saved_variables_path is None or not saved_variables_path.exists():
+            return {"box_count": 0, "enable_box": 0}
+        from installer.runtime import klipper_cfg
+
+        text = saved_variables_path.read_text(encoding="utf-8")
+        section = klipper_cfg.resolve_unique_section(text, "Variables")
+        values = {}
+        for line in text.splitlines(keepends=True)[section.header_index + 1 : section.end_index]:
+            parsed = klipper_cfg.parse_option_line(line)
+            if parsed is not None:
+                values[parsed.key] = parsed.value.strip().strip("'\"")
+        return values
+
+    def persist_script(request):
+        if saved_variables_path is None:
+            return
+        import re
+
+        body = json.loads(request.data.decode("utf-8"))
+        script = body["script"]
+        match = re.fullmatch(r"SAVE_VARIABLE VARIABLE=([a-z0-9_]+) VALUE=(.+)", script)
+        if match is None:
+            raise AssertionError(f"Unexpected G-code: {script}")
+        name, value = match.groups()
+        text = saved_variables_path.read_text(encoding="utf-8")
+        from installer.runtime import klipper_cfg
+
+        try:
+            text = klipper_cfg.set_option_value(text, "Variables", name, value)
+        except klipper_cfg.TargetResolutionError as exc:
+            if exc.reason != "missing":
+                raise
+            text += f"{name} = {value}\n"
+        saved_variables_path.write_text(text, encoding="utf-8")
+
     def urlopen(request, timeout=0):
         url = getattr(request, "full_url", str(request))
+        if "/printer/gcode/script" in url:
+            persist_script(request)
+            return _JsonResponse({"result": "ok"})
+        if "printer/objects/query?save_variables" in url:
+            return _JsonResponse({"result": {"status": {"save_variables": {"variables": saved_variables()}}}})
         if "/machine/services/restart" in url:
             process["pid"] += 1
             return _JsonResponse({"result": "ok"})

@@ -1,3 +1,5 @@
+![Tuba Makes](.github/images/tuba-makes-logo.png)
+
 # Qidi Max 4 Optimized
 
 Opinionated and Optimized Klipper macros and slicer machine GCode for the QIDI Max 4.
@@ -86,7 +88,7 @@ TLTG_RESET_TOOL_MAPPINGS
 
 ### Print-start bed mesh
 
-By default this calibrates a fresh adaptive KAMP mesh by default. To reuse an existing Klipper bed-mesh profile for every optimized start, save its exact name from the Klipper console:
+Each optimized print start calibrates a fresh adaptive KAMP mesh by default. To reuse an existing Klipper bed-mesh profile for every optimized start, save its exact name from the Klipper console:
 
 ```gcode
 SAVE_VARIABLE VARIABLE=tltg_start_bed_mesh_profile VALUE='"default"'
@@ -99,6 +101,14 @@ SAVE_VARIABLE VARIABLE=tltg_start_bed_mesh_profile VALUE='""'
 ```
 
 The setting applies to existing sliced files and requires no change to slicer gcode. The console reports whether start preparation is loading the named profile or calibrating a fresh adaptive mesh. A configured profile must already exist; Klipper stops print preparation if it cannot load the name.
+
+### Minimum chamber temperature
+
+With OrcaSlicer 2.4.2 or later, use the updated `orcaslicer_gcode/start.gcode` and set the filament profile's chamber **Target** and **Minimal** temperatures. For example, Target `60°C` and Minimal `50°C` allow leveling and printing once the chamber reaches `50°C`, while heating continues toward `60°C`. The initial tool's filament supplies the minimum; values above the target are capped at the target.
+
+Minimal `0` keeps the existing target-minus-3°C wait. Older start G-code and QIDI Studio retain that behavior with updated macros; updated Orca start G-code also works with older optimized macros, which ignore the minimum and retain their existing wait. Both the start G-code and optimized macros must be updated to use the shorter wait.
+
+The minimum also applies to the chamber stage of staggered heating. A lower minimum allows nozzle heating to begin while the chamber is still heating toward its target.
 
 ### Staggered print-start heating
 
@@ -120,8 +130,6 @@ You will need to slice files with the latest slicer gcode from this repo (or Orc
 ### End-of-print filament handling
 
 The installer sets `tltg_keep_loaded_between_prints` to `1` if the setting does not already exist. That makes filament retention the default after installation.
-
-The behavior is straightforward:
 
 - `1`: Keep the current QIDI Box filament loaded after a completed print.
 - `0` or not set: Cut and unload the filament after a completed print.
@@ -163,11 +171,9 @@ The console identifies the toolhead sensor trip and the active pause policy.
 
 You will need to manually copy the machine GCode to your slicer of choice to take advantage of the optimized path.  The stock print path remains in place for backwards compatibility, safety, and general user happiness :)
 
-Use the pack that matches your slicer. The two packs are functionally aligned, but their placeholder syntax is different due to variable type differences.
+Use the pack that matches your slicer. The two packs are functionally aligned, but their placeholder syntax differs because of variable type differences.
    - OrcaSlicer: `orcaslicer_gcode/`
    - QIDI Studio: `qidistudio_gcode/`
-
-Use the pack that matches your slicer. The two packs are functionally aligned, but their placeholder syntax is different.
 
 ## Uninstall
 
