@@ -79,7 +79,7 @@ def build_env(printer_data_root: Path, *, moonraker_url: str) -> dict[str, str]:
 
 
 
-def fake_system_root() -> Path:
+def fake_system_root(*, include_moonraker_cache: bool = False) -> Path:
     root = temp_path("system-optimization-flow-")
     (root / "etc/resolvconf/resolv.conf.d").mkdir(parents=True)
     (root / "etc/resolv.conf").write_text("nameserver 114.114.114.114\n", encoding="utf-8")
@@ -108,6 +108,14 @@ def fake_system_root() -> Path:
     for service in ("xl2tpd", "bluetooth", "algo_app.service"):
         (root / "systemd" / f"{service}.json").write_text(
             json.dumps({"exists": True, "service": service, "enabled": "enabled", "active": "active"}, sort_keys=True),
+            encoding="utf-8",
+        )
+    if include_moonraker_cache:
+        moonraker = root / "home/qidi/moonraker/moonraker/components/file_manager/file_manager.py"
+        moonraker.parent.mkdir(parents=True)
+        moonraker.write_text(
+            "from __future__ import annotations\n" +
+            (REPO_ROOT / "installer/tests/fixtures/moonraker_metadata_storage.py").read_text(),
             encoding="utf-8",
         )
     (root / "mounts").mkdir()
@@ -243,14 +251,17 @@ def moonraker_urlopen(
     def persist_script(request):
         if saved_variables_path is None:
             return
+        import ast
         import re
+        import shlex
 
         body = json.loads(request.data.decode("utf-8"))
         script = body["script"]
         match = re.fullmatch(r"SAVE_VARIABLE VARIABLE=([a-z0-9_]+) VALUE=(.+)", script)
         if match is None:
             raise AssertionError(f"Unexpected G-code: {script}")
-        name, value = match.groups()
+        name, raw_value = match.groups()
+        value = repr(ast.literal_eval(shlex.split(raw_value)[0]))
         text = saved_variables_path.read_text(encoding="utf-8")
         from installer.runtime import klipper_cfg
 
