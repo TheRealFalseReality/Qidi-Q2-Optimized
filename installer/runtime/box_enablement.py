@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -431,7 +432,8 @@ def save_live_variables(
 def _post_save_variable(paths: RuntimePaths, name: str, value: str, *, urlopen: UrlOpenFn) -> None:
     request = urllib.request.Request(
         _moonraker_gcode_url(paths.moonraker_url),
-        data=json.dumps({"script": f"SAVE_VARIABLE VARIABLE={name} VALUE={value}"}).encode("utf-8"),
+        # Preserve the Python literal through Klipper's shell-style argument parser.
+        data=json.dumps({"script": f"SAVE_VARIABLE VARIABLE={name} VALUE={shlex.quote(value)}"}).encode("utf-8"),
         method="POST",
         headers={"Content-Type": "application/json"},
     )

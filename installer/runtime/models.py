@@ -242,6 +242,7 @@ class SystemOptimizationsSpec:
     services: SystemServicesSpec
     qidiclient_static_gifs: SystemQidiClientStaticGifsSpec
     moonraker_metadata_3mf: SystemMoonrakerMetadata3mfSpec
+    moonraker_file_manager: SystemMoonrakerMetadata3mfSpec
     rockchip_root_sync: SystemRockchipRootSyncSpec
 
 

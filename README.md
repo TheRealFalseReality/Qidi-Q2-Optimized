@@ -49,6 +49,16 @@ Run one auto-update check manually:
 ~/tltg-optimized-macros/auto-update.sh --run
 ```
 
+### Moonraker 3MF metadata cache
+
+Install and update patch recognized QIDI Moonraker source so unchanged 3MF files reuse their metadata instead of being re-extracted at every startup. This applies even when optional OS optimizations are skipped. Moonraker restarts when its file-manager patch changes; installation requires an idle printer.
+
+The first restart rebuilds existing 3MF metadata once. Later scans still enumerate directories, but only new, changed, or invalidated archives need extraction. Changing the metadata extractor or object-processing policy invalidates the cache. This does not bypass print preparation or archive decompression needed by the printer itself.
+
+Manual 3MF metadata rescans use the archive extractor and keep existing QIDI thumbnail files. A rescan joins extraction already pending for the same archive rather than starting another copy; failures report an error and preserve prior metadata. Ordinary G-code rescans are unchanged.
+
+Unrecognized source is preserved and reported. Uninstall can restore the original source through its system-restoration prompt; files modified after installation are preserved.
+
 ### QIDI Box temperature from Fluidd
 
 The installer adds `TLTG_SET_BOX_TEMP`, a macro for setting the QIDI Box heater target because Qidi's Fluidd config is incapable of setting `heater_box1` correctly.

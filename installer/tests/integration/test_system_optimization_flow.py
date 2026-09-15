@@ -44,8 +44,12 @@ from installer.tests.helpers import (
 class SystemOptimizationFlowTests(unittest.TestCase):
     def test_system_optimization_dry_run_install_and_uninstall_lifecycle(self):
         printer_root = copy_base_runtime()
-        system_root = fake_system_root()
+        system_root = fake_system_root(include_moonraker_cache=True)
         host_run = fake_host_run(system_root)
+        moonraker = system_root / "home/qidi/moonraker/moonraker/components/file_manager/file_manager.py"
+        moonraker.write_bytes(moonraker.read_bytes().replace(b"\n", b"\r\n"))
+        moonraker_before = moonraker.read_bytes()
+        moonraker.chmod(0o640)
         before = snapshot_tree(system_root)
         env = build_env(printer_root, moonraker_url="http://moonraker.invalid")
         env[SYSTEM_ROOT_ENV] = str(system_root)
@@ -113,6 +117,20 @@ class SystemOptimizationFlowTests(unittest.TestCase):
         self.assertEqual(state.system_ledger["schema_version"], 2)
         self.assertNotIn("actions", state.system_ledger)
         self.assertIn("rockchip_root_sync", state.system_ledger["committed_transactions"])
+        cache_id = system_optimizations.MOONRAKER_CACHE_OPERATION
+        self.assertIn(cache_id, state.system_ledger["restore_preimages"])
+        self.assertNotEqual(moonraker.read_bytes(), moonraker_before)
+        self.assertIn(b"\r\n", moonraker.read_bytes())
+        self.assertEqual(moonraker.stat().st_mode & 0o777, 0o640)
+        prior_preimage = state.system_ledger["restore_preimages"][cache_id]
+        cache_policy = {**state.system_ledger, "policy": {"system_optimizations": "disabled", "ai_detection": "unset"}}
+        reconciled = apply_system_optimizations(
+            paths=paths, spec=manifest.system_optimizations, ledger=cache_policy,
+            reporter=PlainReporter(io.StringIO()), input_stream=None, environ=env,
+            source="auto_update_reconcile", run=host_run,
+        )
+        self.assertEqual(reconciled["restore_preimages"][cache_id], prior_preimage)
+        write_installed_state(printer_root / manifest.state_file, _replace_system_ledger(state, reconciled))
 
         run_uninstall(
             paths,
@@ -135,6 +153,64 @@ class SystemOptimizationFlowTests(unittest.TestCase):
             "old apt\n",
         )
         self.assertFalse(dropin.exists())
+        self.assertEqual(moonraker.read_bytes(), moonraker_before)
+        self.assertEqual(moonraker.stat().st_mode & 0o777, 0o640)
+
+    def test_moonraker_cache_admission_and_restart_failure_preserve_source(self):
+        for fault in ("unknown", "unknown_metascan", "symlink", "restart", "concurrent"):
+            with self.subTest(fault=fault):
+                printer_root = copy_base_runtime()
+                root = fake_system_root(include_moonraker_cache=True)
+                env = build_env(printer_root, moonraker_url="http://moonraker.invalid")
+                env[SYSTEM_ROOT_ENV] = str(root)
+                paths = resolve_runtime_paths(bundle_root=REPO_ROOT, environ=env)
+                manifest = load_manifest(REPO_ROOT / "installer/package.yaml")
+                target = root / manifest.system_optimizations.moonraker_file_manager.file.lstrip("/")
+                if fault == "unknown":
+                    target.write_text(target.read_text().replace("retries = 3", "retries = 4"))
+                elif fault == "unknown_metascan":
+                    target.write_text(target.read_text().replace("get_str('filename')", "get_str('filename', '')"))
+                original = target.read_bytes()
+                if fault == "symlink":
+                    other = target.with_name("operator.py")
+                    target.rename(other)
+                    target.symlink_to(other)
+                host_run = fake_host_run(root)
+                failed = False
+
+                def run(command, **kwargs):
+                    nonlocal failed
+                    if not failed and list(command)[-3:] == ["systemctl", "restart", "moonraker.service"]:
+                        if fault == "restart":
+                            failed = True
+                            return CompletedProcess(command, 1, stdout="", stderr="restart failed")
+                        if fault == "concurrent":
+                            failed = True
+                            target.write_bytes(target.read_bytes() + b"\n# concurrent operator edit\n")
+                    return host_run(command, **kwargs)
+
+                expected_error = SystemOptimizationRecoveryError if fault == "concurrent" else SystemOptimizationApplyError
+                with self.assertRaises(expected_error):
+                    apply_system_optimizations(
+                        paths=paths, spec=manifest.system_optimizations,
+                        ledger={"policy": {"system_optimizations": "disabled", "ai_detection": "unset"}},
+                        reporter=PlainReporter(io.StringIO()), input_stream=None,
+                        environ=env, source="yes_install", run=run,
+                    )
+                if fault == "concurrent":
+                    drifted = target.read_bytes()
+                    self.assertTrue(drifted.endswith(b"# concurrent operator edit\n"))
+                    self.assertTrue(_journal_path(paths).exists())
+                    with self.assertRaises(SystemOptimizationRecoveryError):
+                        recover_pending_system_optimization(
+                            paths=paths, manifest=manifest, reporter=PlainReporter(io.StringIO()),
+                            input_stream=None, environ=env, run=host_run,
+                        )
+                    self.assertEqual(target.read_bytes(), drifted)
+                else:
+                    self.assertEqual(target.read_bytes(), original)
+                    self.assertFalse(_journal_path(paths).exists())
+                self.assertEqual(target.is_symlink(), fault == "symlink")
 
     def test_forged_host_preimages_fail_closed_before_uninstall(self):
         printer_root = copy_base_runtime()
@@ -223,10 +299,13 @@ class SystemOptimizationFlowTests(unittest.TestCase):
 
     def test_uninstall_preserves_user_modified_host_state(self):
         printer_root = copy_base_runtime()
-        system_root = fake_system_root()
+        system_root = fake_system_root(include_moonraker_cache=True)
         host_run = fake_host_run(system_root)
         env = build_env(printer_root, moonraker_url="http://moonraker.invalid")
         env[SYSTEM_ROOT_ENV] = str(system_root)
+        boot = printer_root / "boot-id"
+        boot.write_text("test-boot\n")
+        env["TLTG_OPTIMIZED_BOOT_ID_PATH"] = str(boot)
         paths = resolve_runtime_paths(bundle_root=REPO_ROOT, environ=env)
         manifest = load_manifest(REPO_ROOT / "installer/package.yaml")
         compatibility = load_supported_upgrade_sources(REPO_ROOT / "installer/supported_upgrade_sources.yaml")
@@ -236,6 +315,19 @@ class SystemOptimizationFlowTests(unittest.TestCase):
             run=host_run,
         )
         (system_root / "etc/apt/sources.list").write_text("operator apt\n", encoding="utf-8")
+        moonraker = system_root / manifest.system_optimizations.moonraker_file_manager.file.lstrip("/")
+        drifted = moonraker.read_bytes() + b"\n# operator modification outside the patched class\n"
+        moonraker.write_bytes(drifted)
+        state = load_installed_state(printer_root / manifest.state_file)
+        cache_policy = {**state.system_ledger, "policy": {"system_optimizations": "disabled", "ai_detection": "unset"}}
+        reconciled = apply_system_optimizations(
+            paths=paths, spec=manifest.system_optimizations, ledger=cache_policy,
+            reporter=PlainReporter(io.StringIO()), input_stream=None, environ=env,
+            source="auto_update_reconcile", run=host_run,
+        )
+        self.assertEqual(moonraker.read_bytes(), drifted)
+        write_installed_state(printer_root / manifest.state_file, _replace_system_ledger(state, reconciled))
+        (system_root / "etc/apt/sources.list").write_text("operator apt\n", encoding="utf-8")
         report = io.StringIO()
         run_uninstall(
             paths, manifest, compatibility, PlainReporter(report), input_stream=io.StringIO("yes\nyes\nno\n"),
@@ -243,6 +335,7 @@ class SystemOptimizationFlowTests(unittest.TestCase):
             run=host_run,
         )
         self.assertEqual((system_root / "etc/apt/sources.list").read_text(encoding="utf-8"), "operator apt\n")
+        self.assertEqual(moonraker.read_bytes(), drifted)
 
     def test_legacy_host_preimages_migrate_and_restore(self):
         printer_root = copy_base_runtime()

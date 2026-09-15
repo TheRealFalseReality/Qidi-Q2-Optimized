@@ -330,11 +330,15 @@ def moonraker_server(state: str, *, saved_variables_path: Path | None = None):
         return values
 
     def persist_script(body: bytes) -> None:
+        import ast
+        import shlex
+
         script = json.loads(body.decode("utf-8"))["script"]
         match = re.fullmatch(r"SAVE_VARIABLE VARIABLE=([a-z0-9_]+) VALUE=(.+)", script)
         if match is None:
             raise ValueError(f"unexpected saved-variable command: {script}")
-        name, value = match.groups()
+        name, raw_value = match.groups()
+        value = repr(ast.literal_eval(shlex.split(raw_value)[0]))
         if saved_variables_path is None:
             saved_values[name] = value.strip("'\"")
             return
