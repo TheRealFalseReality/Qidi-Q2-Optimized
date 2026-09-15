@@ -135,11 +135,6 @@ The installer SHALL apply host OS optimizations only under explicit persisted po
 - **AND** operation failure rolls back journaled host work without deleting a verified configuration install
 - **AND** incomplete host compensation retains a recovery blocker and does not report the overall operation as complete
 
-#### Scenario: Multi-plate 3MF metadata follows the selected plate
-- **WHEN** enabled Moonraker optimization reads a `.gcode.3mf` archive
-- **THEN** G-code, metadata, and thumbnail selection use its valid selected plate index
-- **AND** missing or invalid plate metadata falls back to plate 1
-
 #### Scenario: Uninstall follows the operator's host-state decision
 - **WHEN** uninstall finds host restore preimages
 - **THEN** accepted restoration reverts only unchanged installer-owned targets
@@ -159,6 +154,41 @@ The installer SHALL apply host OS optimizations only under explicit persisted po
 - **AND** reboot is scheduled only after successful transaction completion, explicit authorization, and a fresh idle-printer check
 - **AND** later execution clears the requirement only after post-boot verification succeeds
 - **AND** dry-run, active, or unknown printer state performs no reboot
+
+### Requirement: Recoverable Moonraker metadata optimization
+Normal install and update SHALL apply recognized Moonraker metadata optimizations independently of optional OS optimization policy, retain original source preimages, and preserve unrecognized or operator-modified source.
+
+#### Scenario: Multi-plate 3MF metadata follows the selected plate
+- **WHEN** the optimized metadata extractor reads a `.gcode.3mf` archive
+- **THEN** G-code, metadata, and thumbnail selection use its valid selected plate index
+- **AND** missing or invalid plate metadata falls back to plate 1
+
+#### Scenario: Unchanged archives reuse persistent metadata
+- **WHEN** startup observation or upload handling encounters a 3MF with cached metadata matching its size, modification time, extractor stamp, and object-processing policy
+- **THEN** extraction is skipped without changing cached thumbnails or last-printed fields
+- **AND** new, changed, unstamped, or invalidated archives remain eligible for extraction
+- **AND** an unavailable extractor never validates a cached archive
+
+#### Scenario: Mixed metadata requests complete without a stuck queue
+- **WHEN** G-code and 3MF requests share a pending metadata queue
+- **THEN** both entrypoints use the same cache-aware worker
+- **AND** a request that becomes valid while queued is removed and its waiter released
+- **AND** exhausting extraction retries is not treated as a successful metadata refresh and does not prevent later requests from completing
+
+#### Scenario: Manual 3MF rescans use archive-aware extraction
+- **WHEN** an operator requests a metadata rescan for a 3MF within the G-code root
+- **THEN** the archive is explicitly re-extracted through the shared metadata queue, or the request joins extraction already pending for that archive
+- **AND** existing QIDI thumbnail files are not deleted
+- **AND** extraction failure returns an error and preserves prior metadata
+- **AND** escaped, reserved, and missing archive paths are rejected before extraction
+- **AND** ordinary G-code rescan behavior remains unchanged
+
+#### Scenario: File-manager deployment remains reversible
+- **WHEN** recognized file-manager source requires the cache patch
+- **THEN** the installer validates the reviewed metadata class and metascan handler before backup, preserves unrelated source and line endings, and replaces the file atomically
+- **AND** source changes require a successful Moonraker restart; restart failure compensates the file change or retains a recovery blocker
+- **AND** repeated reconciliation retains the first restore preimage without accumulating backups
+- **AND** accepted uninstall restoration reverts only the unchanged installed file; concurrent changes and operator drift are preserved
 
 ### Requirement: Safe unattended updates
 Automatic updates SHALL require durable operator enrollment, use the same admission, ownership, recovery, activation, and persisted host-policy rules as direct installation, and advance release state only after successful activation.

@@ -14,6 +14,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from . import messages
+from .moonraker_file_manager import OPERATION as MOONRAKER_CACHE_OPERATION, patch_file_manager
 from .auto_update import current_auto_update_checksum
 from .errors import InstallerError
 from .fs_atomic import atomic_delete, atomic_write_text
@@ -256,9 +257,23 @@ def maybe_emit_system_dry_run(
         policy = {"system_optimizations": "enabled", "ai_detection": "keep_enabled"}
     reporter.line("System optimizations dry-run:")
     if policy.get("system_optimizations") != "enabled":
-        reporter.line("  - skipped by policy")
-        return
+        reporter.line("  - optional OS optimizations skipped by policy")
     for operation_id in _selected_operation_ids(manifest.system_optimizations, policy):
+        if operation_id == MOONRAKER_CACHE_OPERATION and _system_root_allowed(paths=paths, environ=environ):
+            root = _system_root(environ)
+            spec = manifest.system_optimizations
+            prior = prior_ledger or {}
+            try:
+                if _moonraker_cache_has_drift(spec, root, prior.get("restore_preimages", {}), prior.get("outcomes", {})):
+                    reporter.line("  - would preserve modified Moonraker file_manager.py")
+                elif _operation_needs_apply(operation_id, spec=spec, root=root, run=run):
+                    reporter.line(f"  - would apply {operation_id} and restart Moonraker")
+                else:
+                    target = _map_path(root, spec.moonraker_file_manager.file)
+                    reporter.line(f"  - {operation_id}: {'already current' if target.exists() else 'source missing'}")
+            except InstallerError as exc:
+                reporter.line(f"  - would preserve Moonraker file_manager.py: {exc}")
+            continue
         if operation_id == ROCKCHIP_ROOT_SYNC_OPERATION:
             if not _system_root_allowed(paths=paths, environ=environ):
                 reporter.line(f"  - would evaluate {operation_id}")
@@ -311,6 +326,22 @@ def maybe_prompt_restore_system_optimizations(
     )
 
 
+def _outcome_file_sha256(outcome: dict[str, Any]) -> str | None:
+    postflight = outcome.get("postflight")
+    return postflight.get("sha256") if isinstance(postflight, dict) else None
+
+
+def _moonraker_cache_has_drift(spec: SystemOptimizationsSpec, root: Path, preimages: dict[str, Any], outcomes: dict[str, Any]) -> bool:
+    if MOONRAKER_CACHE_OPERATION not in preimages:
+        return False
+    target = _map_path(root, spec.moonraker_file_manager.file)
+    expected = _outcome_file_sha256(outcomes.get(MOONRAKER_CACHE_OPERATION, {}))
+    return _path_has_symlink_component(target, root=root) or not target.is_file() or (
+        hashlib.sha256(target.read_bytes()).hexdigest() != expected
+        and not _file_matches_preimage(preimages[MOONRAKER_CACHE_OPERATION], root=root)
+    )
+
+
 def _outcome_mount_options(outcome: dict[str, Any]) -> tuple[str, ...] | None:
     postflight = outcome.get("postflight")
     if not isinstance(postflight, dict):
@@ -351,9 +382,18 @@ def restore_system_optimizations(
         if outcome is None or outcome.get("status") == "legacy_unproven":
             reporter.line(f"System optimization {operation_id} has legacy ownership uncertainty and was preserved.")
             continue
+        if operation_id == MOONRAKER_CACHE_OPERATION and _path_has_symlink_component(_map_path(root, manifest.system_optimizations.moonraker_file_manager.file), root=root):
+            reporter.line("Moonraker file_manager.py was modified after install and was preserved.")
+            continue
         if _operation_matches_preimage(operation_id, preimage=preimage, spec=manifest.system_optimizations, paths=paths, root=root, run=run):
             continue
-        if operation_id != ROCKCHIP_ROOT_SYNC_OPERATION and _operation_needs_apply(
+        if operation_id == MOONRAKER_CACHE_OPERATION:
+            target = _map_path(root, manifest.system_optimizations.moonraker_file_manager.file)
+            expected = _outcome_file_sha256(outcome)
+            if _path_has_symlink_component(target, root=root) or not target.is_file() or hashlib.sha256(target.read_bytes()).hexdigest() != expected:
+                reporter.line("Moonraker file_manager.py was modified after install and was preserved.")
+                continue
+        if operation_id not in {ROCKCHIP_ROOT_SYNC_OPERATION, MOONRAKER_CACHE_OPERATION} and _operation_needs_apply(
             operation_id, spec=manifest.system_optimizations, root=root, run=run
         ):
             reporter.line(f"System optimization {operation_id} was modified after install and was preserved.")
@@ -389,9 +429,9 @@ def restore_system_optimizations(
             _restore_service(preimage, root=root, sudo_password=sudo_password, run=run)
         elif operation_id == "qidiclient_static_gifs":
             _restore_gifs(preimage, root=root, sudo_password=sudo_password, run=run)
-        elif operation_id == MOONRAKER_METADATA_OPERATION:
+        elif operation_id in {MOONRAKER_METADATA_OPERATION, MOONRAKER_CACHE_OPERATION}:
             _restore_file_preimage(preimage, paths=paths, root=root, sudo_password=sudo_password, run=run)
-            _restart_service("moonraker.service", root=root, sudo_password=sudo_password, run=run)
+            _restart_service("moonraker.service", root=root, sudo_password=sudo_password, run=run, required=operation_id == MOONRAKER_CACHE_OPERATION)
         elif operation_id == ROCKCHIP_ROOT_SYNC_OPERATION:
             restored = _restore_rockchip(
                 preimage,
@@ -489,6 +529,9 @@ def apply_system_optimizations(
     try:
         for operation_id in selected_ids:
             started_at = _now()
+            if operation_id == MOONRAKER_CACHE_OPERATION and _moonraker_cache_has_drift(spec, root, restore_preimages, ledger.get("outcomes", {})):
+                reporter.line("Moonraker file_manager.py was modified after install and was preserved.")
+                continue
             if operation_id == ROCKCHIP_ROOT_SYNC_OPERATION:
                 classification = _classify_rockchip_operation(
                     paths=paths,
@@ -648,14 +691,22 @@ def apply_system_optimizations(
                     )
                     continue
             elif not _operation_needs_apply(operation_id, spec=spec, root=root, run=run):
+                if operation_id == MOONRAKER_CACHE_OPERATION and operation_id in restore_preimages:
+                    # A no-op must not adopt concurrent edits as a new owned file hash.
+                    continue
+                status = "already_current"
+                if operation_id == MOONRAKER_CACHE_OPERATION and not _map_path(root, spec.moonraker_file_manager.file).exists():
+                    status = "missing"
+                    reporter.line("Moonraker file_manager.py is missing; cache patch was not applied.")
                 actions.append(
                     _action_record(
                         operation_id=operation_id,
-                        status="already_current",
+                        status=status,
                         started_at=started_at,
                         preimage=None,
                         desired=_desired(operation_id, spec),
-                        postflight="ok",
+                        postflight=(_postflight_operation(operation_id, paths=paths, spec=spec, root=root, run=run)
+                                    if operation_id == MOONRAKER_CACHE_OPERATION else "ok"),
                         source=source,
                         reconciled=False,
                     )
@@ -696,6 +747,11 @@ def apply_system_optimizations(
                 root=root,
                 run=run,
             )
+            if operation_id == MOONRAKER_CACHE_OPERATION:
+                original = Path(preimage["backup_path"]).read_bytes().decode("utf-8")
+                expected = hashlib.sha256(patch_file_manager(original).encode("utf-8")).hexdigest()
+                if postflight.get("sha256") != expected:
+                    raise SystemOptimizationError("Moonraker file_manager.py changed before postflight completed.")
             action = _action_record(
                 operation_id=operation_id,
                 status="applied",
@@ -832,6 +888,15 @@ def _postflight_operation(
         return state
     if operation_id == "qidiclient_static_gifs":
         return _postflight_gifs(paths=paths, spec=spec, root=root)
+    if operation_id == MOONRAKER_CACHE_OPERATION:
+        target = _map_path(root, spec.moonraker_file_manager.file)
+        if not target.exists():
+            return {"path": spec.moonraker_file_manager.file, "exists": False}
+        content = target.read_bytes()
+        text = content.decode("utf-8")
+        if patch_file_manager(text) != text:
+            raise SystemOptimizationError("Moonraker file_manager.py cache patch failed postflight.")
+        return {"path": spec.moonraker_file_manager.file, "sha256": hashlib.sha256(content).hexdigest()}
     if operation_id == MOONRAKER_METADATA_OPERATION:
         target = _map_path(root, spec.moonraker_metadata_3mf.file)
         return {"path": spec.moonraker_metadata_3mf.file, "patched": target.exists() and MOONRAKER_METADATA_PATCH_MARKER in target.read_text(encoding="utf-8")}
@@ -853,6 +918,8 @@ def _capture_operation_preimage(operation_id: str, *, paths: RuntimePaths, spec:
         return {"file": _capture_file(spec.apt_sources.file, paths=paths, root=root)}
     if operation_id == "qidiclient_static_gifs":
         return _capture_gifs_preimage(paths=paths, spec=spec, root=root)
+    if operation_id == MOONRAKER_CACHE_OPERATION:
+        return _capture_file(spec.moonraker_file_manager.file, paths=paths, root=root)
     if operation_id == MOONRAKER_METADATA_OPERATION:
         return _capture_file(spec.moonraker_metadata_3mf.file, paths=paths, root=root)
     if operation_id == ROCKCHIP_ROOT_SYNC_OPERATION:
@@ -879,6 +946,9 @@ def _apply_operation(operation_id: str, *, paths: RuntimePaths, spec: SystemOpti
         return
     if operation_id == "qidiclient_static_gifs":
         _apply_gifs(paths=paths, spec=spec, root=root, sudo_password=sudo_password, run=run, preimage=preimage)
+        return
+    if operation_id == MOONRAKER_CACHE_OPERATION:
+        _apply_moonraker_cache_patch(spec=spec, root=root, sudo_password=sudo_password, run=run, preimage=preimage)
         return
     if operation_id == MOONRAKER_METADATA_OPERATION:
         _apply_moonraker_metadata_patch(spec=spec, root=root, sudo_password=sudo_password, run=run, preimage=preimage)
@@ -934,6 +1004,33 @@ def _apply_service(service: str, *, root: Path, sudo_password: str | None, run, 
     if "." not in service:
         run_sudo_ignore_failure([f"/etc/init.d/{service}", "stop"], run=run, password=sudo_password or "")
 
+
+
+def _apply_moonraker_cache_patch(*, spec: SystemOptimizationsSpec, root: Path, sudo_password: str | None, run, preimage: dict[str, Any]) -> None:
+    path = spec.moonraker_file_manager.file
+    target = _map_path(root, path)
+    _reject_symlink_path(target, root=root)
+    original = target.read_bytes()
+    if hashlib.sha256(original).hexdigest() != preimage.get("sha256"):
+        raise SystemOptimizationError("Moonraker file_manager.py changed after backup; refusing replacement.")
+    patched = patch_file_manager(original.decode("utf-8"))
+    staged_path = f"{path}.tltg-{uuid.uuid4().hex}.tmp"
+    staged = _map_path(root, staged_path)
+    try:
+        _write_file_preserving_preimage(staged_path, patched, preimage=preimage, root=root, sudo_password=sudo_password, run=run)
+        _reject_symlink_path(target, root=root)
+        if target.read_bytes() != original:
+            raise SystemOptimizationError("Moonraker file_manager.py changed before replacement.")
+        if _is_fake_root(root):
+            os.replace(staged, target)
+        else:
+            run_sudo_or_raise(["mv", "-f", staged_path, path], messages.SYSTEM_OPTIMIZATIONS_FAILED, run=run, password=sudo_password or "")
+    finally:
+        if _is_fake_root(root):
+            staged.unlink(missing_ok=True)
+        else:
+            run_sudo_ignore_failure(["rm", "-f", staged_path], run=run, password=sudo_password or "")
+    _restart_service(spec.moonraker_file_manager.restart_service, root=root, sudo_password=sudo_password, run=run, required=True)
 
 
 def _apply_moonraker_metadata_patch(
@@ -1079,6 +1176,8 @@ def _restore_preimage_map(preimages: dict[str, Any], *, paths: RuntimePaths, roo
             _restore_service(preimage, root=root, sudo_password=sudo_password, run=run)
         elif operation_id == "qidiclient_static_gifs":
             _restore_gifs(preimage, root=root, sudo_password=sudo_password, run=run)
+        elif operation_id == MOONRAKER_CACHE_OPERATION:
+            _restore_moonraker_cache_preimage(preimage, paths=paths, root=root, sudo_password=sudo_password, run=run)
         elif operation_id == MOONRAKER_METADATA_OPERATION:
             _restore_file_preimage(preimage, paths=paths, root=root, sudo_password=sudo_password, run=run)
             _restart_service("moonraker.service", root=root, sudo_password=sudo_password, run=run)
@@ -1094,6 +1193,17 @@ def _restore_preimage_map(preimages: dict[str, Any], *, paths: RuntimePaths, roo
                 last_applied_mount_options=None,
             )
 
+
+
+def _restore_moonraker_cache_preimage(preimage: dict[str, Any], *, paths: RuntimePaths, root: Path, sudo_password: str | None, run) -> None:
+    target = _map_path(root, preimage["path"])
+    _reject_symlink_path(target, root=root)
+    original = Path(preimage["backup_path"]).read_bytes()
+    expected = patch_file_manager(original.decode("utf-8")).encode("utf-8")
+    if not target.is_file() or target.read_bytes() not in (original, expected):
+        raise SystemOptimizationRecoveryError("Moonraker file_manager.py changed during the transaction; preserving it for recovery.")
+    _restore_file_preimage(preimage, paths=paths, root=root, sudo_password=sudo_password, run=run)
+    _restart_service("moonraker.service", root=root, sudo_password=sudo_password, run=run, required=True)
 
 
 def _file_matches_preimage(preimage: dict[str, Any], *, root: Path) -> bool:
@@ -1121,7 +1231,7 @@ def _operation_matches_preimage(
 ) -> bool:
     if operation_id == "dns":
         return all(_file_matches_preimage(item, root=root) for item in preimage.get("files", []))
-    if operation_id in {"apt_sources", MOONRAKER_METADATA_OPERATION}:
+    if operation_id in {"apt_sources", MOONRAKER_METADATA_OPERATION, MOONRAKER_CACHE_OPERATION}:
         item = preimage.get("file", preimage)
         return isinstance(item, dict) and _file_matches_preimage(item, root=root)
     if operation_id.startswith("service_"):
@@ -1342,8 +1452,11 @@ def _service_state_is_disabled(state: dict[str, Any]) -> bool:
     )
 
 
-def _restart_service(service: str, *, root: Path, sudo_password: str | None, run) -> None:
-    run_sudo_ignore_failure(["systemctl", "restart", service], run=run, password=sudo_password or "")
+def _restart_service(service: str, *, root: Path, sudo_password: str | None, run, required: bool = False) -> None:
+    if required:
+        run_sudo_or_raise(["systemctl", "restart", service], messages.SYSTEM_OPTIMIZATIONS_FAILED, run=run, password=sudo_password or "")
+    else:
+        run_sudo_ignore_failure(["systemctl", "restart", service], run=run, password=sudo_password or "")
 
 
 def _reject_operation_unsafe_for_compare(operation_id: str, *, spec: SystemOptimizationsSpec, root: Path) -> None:
@@ -1373,6 +1486,9 @@ def _reject_operation_unsafe_for_compare(operation_id: str, *, spec: SystemOptim
             except tarfile.TarError as exc:
                 raise SystemOptimizationError("qidiclient static GIF archive could not be read.") from exc
         return
+    if operation_id == MOONRAKER_CACHE_OPERATION:
+        _reject_symlink_path(_map_path(root, spec.moonraker_file_manager.file), root=root)
+        return
     if operation_id == MOONRAKER_METADATA_OPERATION:
         _reject_symlink_path(_map_path(root, spec.moonraker_metadata_3mf.file), root=root)
         return
@@ -1400,6 +1516,12 @@ def _operation_needs_apply(operation_id: str, *, spec: SystemOptimizationsSpec, 
             _map_path(root, spec.qidiclient_static_gifs.destination),
             Path(spec.qidiclient_static_gifs.archive),
         )
+    if operation_id == MOONRAKER_CACHE_OPERATION:
+        path = _map_path(root, spec.moonraker_file_manager.file)
+        if not path.exists():
+            return False
+        text = path.read_bytes().decode("utf-8")
+        return patch_file_manager(text) != text
     if operation_id == MOONRAKER_METADATA_OPERATION:
         path = _map_path(root, spec.moonraker_metadata_3mf.file)
         return path.exists() and MOONRAKER_METADATA_PATCH_MARKER not in path.read_text(encoding="utf-8")
@@ -1766,7 +1888,7 @@ def _path_has_symlink_component(path: Path, *, root: Path) -> bool:
 
 
 def _selected_operation_ids(spec: SystemOptimizationsSpec, policy: dict[str, Any]) -> tuple[str, ...]:
-    ids = [MOONRAKER_METADATA_OPERATION]
+    ids = [MOONRAKER_METADATA_OPERATION, MOONRAKER_CACHE_OPERATION]
     if policy.get("system_optimizations") != "enabled":
         return tuple(ids)
     ids.extend(["dns", "apt_sources", "qidiclient_static_gifs"])
@@ -1808,6 +1930,8 @@ def _desired(operation_id: str, spec: SystemOptimizationsSpec) -> dict[str, Any]
         return {"sha256": hashlib.sha256(spec.apt_sources.content.encode("utf-8")).hexdigest()}
     if operation_id == "qidiclient_static_gifs":
         return {"archive_sha256": spec.qidiclient_static_gifs.sha256}
+    if operation_id == MOONRAKER_CACHE_OPERATION:
+        return {"path": spec.moonraker_file_manager.file, "restart_service": spec.moonraker_file_manager.restart_service}
     if operation_id == MOONRAKER_METADATA_OPERATION:
         return {"path": spec.moonraker_metadata_3mf.file, "restart_service": spec.moonraker_metadata_3mf.restart_service}
     if operation_id == ROCKCHIP_ROOT_SYNC_OPERATION:
@@ -2255,6 +2379,7 @@ def _host_operation_ids(spec: SystemOptimizationsSpec) -> frozenset[str]:
             "apt_sources",
             "qidiclient_static_gifs",
             MOONRAKER_METADATA_OPERATION,
+            MOONRAKER_CACHE_OPERATION,
             ROCKCHIP_ROOT_SYNC_OPERATION,
             *(f"service_{service}" for service in spec.services.disable),
             *(f"service_{item.service}" for item in spec.services.optional_disable),
@@ -2281,6 +2406,9 @@ def _validate_host_preimage(
         return
     if operation_id == "apt_sources":
         _validate_host_file_preimage(preimage.get("file"), expected_path=spec.apt_sources.file, paths=paths)
+        return
+    if operation_id == MOONRAKER_CACHE_OPERATION:
+        _validate_host_file_preimage(preimage, expected_path=spec.moonraker_file_manager.file, paths=paths)
         return
     if operation_id == MOONRAKER_METADATA_OPERATION:
         _validate_host_file_preimage(preimage, expected_path=spec.moonraker_metadata_3mf.file, paths=paths)
@@ -2667,6 +2795,9 @@ def _restore_preimage_for_operation(
         return
     if operation_id == "qidiclient_static_gifs":
         _restore_gifs(preimage, root=root, sudo_password=sudo_password, run=run)
+        return
+    if operation_id == MOONRAKER_CACHE_OPERATION:
+        _restore_moonraker_cache_preimage(preimage, paths=paths, root=root, sudo_password=sudo_password, run=run)
         return
     if operation_id == MOONRAKER_METADATA_OPERATION:
         _restore_file_preimage(preimage, paths=paths, root=root, sudo_password=sudo_password, run=run)

@@ -1,5 +1,11 @@
 # Changelog
 
+## 26.09.15.1
+- Fixed manual 3MF metadata rescans to use the archive extractor without deleting QIDI thumbnail files. Rescans join pending extraction instead of duplicating it; failures preserve prior metadata and return an error. The 3MF rescan path rejects escaped, reserved, or missing archives; ordinary G-code rescanning remains unchanged.
+- Added a guarded Moonraker file-manager patch to normal install and update, including when optional OS optimizations are skipped. Unchanged 3MF files reuse cached metadata instead of re-extracting at every startup or filesystem notification; file size, modification time, extractor changes, and object-processing policy invalidate the cache.
+- Unified 3MF and G-code metadata queue processing, fixed a cached-request loop that could hang Moonraker, and removed repeated whole-queue copies. Skipped extraction leaves cached last-printed fields and thumbnails intact.
+- Retained byte-for-byte source backups, checked Moonraker restarts, and preserved modified files during reconciliation and uninstall. The first restart rebuilds unstamped 3MF metadata once; directory enumeration and processing of new or changed archives still occur.
+
 ## 26.09.09.1
 - Replaced per-version upgrade metadata with one validated list of allowed patch targets and source hashes. Supported historical package versions remain explicitly listed and can upgrade directly.
 - Unified configuration change planning for install, uninstall, and restore. The installer rejects files changed since planning, requires an idle printer before restore, and rolls back interrupted, uncommitted writes without replacing saved-variable files.
