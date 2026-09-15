@@ -251,14 +251,17 @@ def moonraker_urlopen(
     def persist_script(request):
         if saved_variables_path is None:
             return
+        import ast
         import re
+        import shlex
 
         body = json.loads(request.data.decode("utf-8"))
         script = body["script"]
         match = re.fullmatch(r"SAVE_VARIABLE VARIABLE=([a-z0-9_]+) VALUE=(.+)", script)
         if match is None:
             raise AssertionError(f"Unexpected G-code: {script}")
-        name, value = match.groups()
+        name, raw_value = match.groups()
+        value = repr(ast.literal_eval(shlex.split(raw_value)[0]))
         text = saved_variables_path.read_text(encoding="utf-8")
         from installer.runtime import klipper_cfg
 

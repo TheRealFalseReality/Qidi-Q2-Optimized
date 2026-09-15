@@ -1,6 +1,7 @@
 # Changelog
 
 ## 26.09.15.1
+- Fixed installer QIDI Box tool-slot string quoting so missing mappings and approved mapping corrections save without Klipper literal-parsing errors, including when Box enablement is declined.
 - Fixed manual 3MF metadata rescans to use the archive extractor without deleting QIDI thumbnail files. Rescans join pending extraction instead of duplicating it; failures preserve prior metadata and return an error. The 3MF rescan path rejects escaped, reserved, or missing archives; ordinary G-code rescanning remains unchanged.
 - Added a guarded Moonraker file-manager patch to normal install and update, including when optional OS optimizations are skipped. Unchanged 3MF files reuse cached metadata instead of re-extracting at every startup or filesystem notification; file size, modification time, extractor changes, and object-processing policy invalidate the cache.
 - Unified 3MF and G-code metadata queue processing, fixed a cached-request loop that could hang Moonraker, and removed repeated whole-queue copies. Skipped extraction leaves cached last-printed fields and thumbnails intact.
