@@ -2,13 +2,15 @@
 
 ## Current status
 
-`installer/klipper/extras/tltg_pa_calibration.py` retains bounded non-homing CS1237 characterization code, but the scheduled direct-response path is rejected for production. Firmware returns cached state without conversion identity, repeated captures lose distinct responses, and `query_cs1237_config_r` is not a side-effect-free state check.
+`installer/klipper/extras/tltg_pa_calibration.py` retains bounded non-homing CS1237 characterization code, but the scheduled direct-response path is rejected for production. Raw reads attempt ADC acquisition but can return stale or empty buffers and lack conversion identity. Earlier response-identity filtering cannot establish physical conversion counts or transport loss. `query_cs1237_config_r` is not a side-effect-free state check.
 
-`CALIBRATION_ENABLED = False` and `DIRECT_CAPTURE_ENABLED = False` remain mandatory. `TLTG_PA_CALIBRATE TEMP=<celsius> NOZZLE=<mm>` returns `PA_CALIBRATION_UNVALIDATED` before heating, homing, motion, extrusion, capture, or pressure-advance changes. Developer sensor commands are not registered even if `developer_capture: True` is set. The production code retains fail-closed preflight, exact trapq runtime hashes, nozzle resource-plan validation, stationary lead-in/transition/lead-out planning, pulse grouping, orchestration ordering, idempotent cleanup, and result/failure formatting. Production nozzle plans remain `hardware_validated=False`, and no physical backend is wired to the public command.
+**Correction:** the earlier command-table mapping used the wrong record field. [Corrected local firmware findings](local-firmware-findings.md) supersede the cache-only raw-read and GPIO-passive origin interpretations. `read_origin_data()` performs zeroing and changes the probing reference. The historical physical measurements below remain observations, not validation of those interpretations. No printer was contacted for the correction. The [follow-up change](proposal.md) plans raw-read qualification; no production backend is qualified.
+
+`CALIBRATION_ENABLED = False`, `DIRECT_CAPTURE_ENABLED = False`, and `ORIGIN_CAPTURE_ENABLED = False` remain mandatory. `TLTG_PA_CALIBRATE TEMP=<celsius> NOZZLE=<mm>` returns `PA_CALIBRATION_UNVALIDATED` before heating, homing, motion, extrusion, capture, or pressure-advance changes. Developer sensor commands are not registered even if `developer_capture: True` is set. The production code retains fail-closed preflight, exact trapq runtime hashes, nozzle resource-plan validation, stationary lead-in/transition/lead-out planning, pulse grouping, orchestration ordering, idempotent cleanup, and result/failure formatting. Production nozzle plans remain `hardware_validated=False`, and no physical backend is wired to the public command.
 
 Controlled `0.4 mm` nozzle testing with QIDI Box-fed PLA at `215 °C` established stationary direct-trapq extrusion, load-cell response under flow, PA/smooth-time restoration, ordinary E-move continuity, source preservation, chute clearing after at most two pulses, final cleanup, and successful stock `G28` after direct extrusion. Three of nine `500 Hz` under-load captures missed responses, isolated invalid excursions persisted, and repeated K responses were not repeatable enough to select a candidate. A single `250 Hz` under-load capture returned all `363/363` responses but is insufficient to establish a production rate.
 
-Sanitized idle cadence traces are in `evidence/direct-read-cadence.json`; the controlled direct-read summary is in `evidence/controlled-0.4-pla-215.json`; four GPIO-passive origin-cache traces under stationary extrusion are in `evidence/origin-cache-under-force.json`; three ten-pulse K `0.020` qualification campaigns are summarized in `evidence/origin-cache-repeatability.json`. Absolute host timestamps and temporary harness paths are not retained. Host call or response time is not treated as proven ADC conversion time, and exploratory outlier heuristics are not production classifiers.
+Sanitized idle cadence traces are in `evidence/direct-read-cadence.json`; the controlled direct-read summary is in `evidence/controlled-0.4-pla-215.json`; four origin-read traces (now identified as zeroing calls) under stationary extrusion are in `evidence/origin-cache-under-force.json`; three ten-pulse K `0.020` qualification campaigns are summarized in `evidence/origin-cache-repeatability.json`. Absolute host timestamps and temporary harness paths are not retained. Host call or response time is not treated as proven ADC conversion time, and exploratory outlier heuristics are not production classifiers.
 
 ## Installed Max 4 contract
 
@@ -115,11 +117,11 @@ Analysis used `file`, `nm`, `rabin2`, `radare2`, `strings`, `dwarfdump`, package
 |---|---|---|
 | Configure pins | `config_cs1237 oid=%d dout_pin=%s sclk_pin=%s` | MCU configuration callback |
 | Configure/restart ADC | `query_cs1237_begin oid=%c config=%u` → `query_cs1237_begin_read oid=%c config=%u` | Ready handler and `CS_WEIGHT_BEGIN`; expected config `60` |
-| Read configured value | `query_cs1237_config_r oid=%c` → `query_cs1237_zero_config_read oid=%c config=%u` | Side-effect-free compatibility check |
-| Direct data read | `query_cs1237_read oid=%c reg=%u read_len=%u` → `query_cs1237_data oid=%c data=%*s` | Validated non-homing acquisition uses `[oid, 0, 0]` |
+| Read configured value | `query_cs1237_config_r oid=%c` → `query_cs1237_zero_config_read oid=%c config=%u` | GPIO configuration read; not passive |
+| Direct data read | `query_cs1237_read oid=%c reg=%u read_len=%u` → `query_cs1237_data oid=%c data=%*s` | Experimental acquisition uses `[oid, 0, 0]`; not hardware-qualified |
 | Read zero value | `query_cs1237_zero_read_only oid=%c` → `query_cs1237_zero_read_o oid=%c data=%*s` | Stock zero checking |
 | Re-zero | `query_cs1237_zero oid=%c` → `query_cs1237_zero_read oid=%c data=%*s` | Mutates the stock zero state; forbidden for calibration capture |
-| Set recurring poll interval | `query_cs1237 oid=%c rest_ticks=%u` | Nonzero only in recovered homing start; zero in homing clear |
+| Start/stop recurring polling | `query_cs1237 oid=%c rest_ticks=%u` | Nonzero only in recovered homing start; zero in homing clear |
 | Arm homing trigger | `cs1237_setup_home oid=%c clock=%u threshold=%u trsync_oid=%c trigger_reason=%c error_reason=%c filter=%u` | Threshold, watchdog, `trsync`, and stepper-stop semantics; forbidden for calibration capture |
 | Query homing state | `query_cs1237_home_state oid=%c` → `cs1237_home_state oid=%c homing=%c trigger_clock=%u` | Homing cleanup |
 
@@ -148,7 +150,7 @@ clock = mcu.print_time_to_clock(print_time)
 rest_ticks = mcu.print_time_to_clock(print_time + rest_time) - clock
 ```
 
-QIDI `HomingMove._calc_endstop_rate()` computes `rest_time = move_t / max_steps`. `rest_ticks` is therefore an MCU-clock polling interval scaled to approximately one check per maximum participating step during the homing move. It is not a host sleep, sample count, microsecond value, settling delay, or ADC rate register.
+QIDI `HomingMove._calc_endstop_rate()` computes `rest_time = move_t / max_steps`. The host therefore requests an MCU-clock polling interval scaled to approximately one check per maximum participating step. Corrected MCU analysis shows that firmware instead uses a fixed 36,000 ticks for any nonzero value; zero stops polling. It is not a host sleep, sample count, microsecond value, settling delay, or ADC rate register.
 
 The recovered stop path is:
 
@@ -188,11 +190,9 @@ The response dictionary includes `query_cs1237_data oid=%c data=%*s` as response
 
 The absence of `cs1237_data` from the matching MCU dictionary explains why passive `query_cs1237` experiments produced no messages consumable by the host bulk queue. A Klipper serial response absent from the MCU dictionary cannot be decoded by the matching host message parser.
 
-The firmware routine at `0x0800bd28`, identified from the command table as `command_query_cs1237_read`, loads the command word, uses only its low OID byte, validates the object type, loads CS1237 object state at offsets `0x74` and `0x78`, and emits the direct-read response through the response descriptor near `0x0800f4a4`. No instruction consumes the advertised `reg` or `read_len` fields. The command returns cached sensor state rather than initiating a conversion or complete host-visible bulk stream.
+The corrected command table assigns `0x0800bd28` to homing-state reads and `0x0800bd74` to stored-reference read-only queries. Raw handler `0x0800dbcc` calls ADC reader `0x0800db14`; `reg` and `read_len` are unused. Ready input updates the buffer, while not-ready input can return old or empty data. Zeroing handler `0x0800dc20` performs repeated reads and updates reference state.
 
-A nearby routine at `0x0800bd74` packages a 32-bit value from SRAM `0x20000174` as four bytes through response metadata near `0x0800f494`. The exact association of this helper with zero/configuration operations remains unresolved; the four-byte little-endian packaging is consistent with live direct and zero-read payloads.
-
-The raw firmware is Cortex-M Thumb code with an apparent image base near `0x08003000`. Disassembly labels around mixed code/data boundaries are provisional unless corroborated by the command table.
+The Cortex-M Thumb flash base is `0x08008000`. The table at `0x080101c4` uses 16-byte records, with the handler at offset `+12`. Dispatcher, dictionary, host-binding, and emulator checks corroborate this corrected alignment.
 
 ## Rejected passive bulk path
 
@@ -202,7 +202,7 @@ Calling `query_cs1237` without `cs1237_setup_home` did not expose a passive stre
 
 `query_cs1237_end_cmd` is the host's synchronous query wrapper around `query_cs1237_read`; it is not a continuous-stream stop command. The recurring stream stop command is `query_cs1237([oid, 0])` and belongs to the homing lifecycle.
 
-No safe production route is established. Adding a conversion-identified MCU bulk response would require a toolhead firmware change; cached direct reads and homing-trigger acquisition do not satisfy the calibration contract.
+No safe production route is established. Adding a conversion-identified MCU bulk response would require a toolhead firmware change; stock raw reads remain a candidate for qualification, while homing-trigger acquisition remains excluded.
 
 ## Rejected scheduled direct-response path
 
@@ -242,13 +242,13 @@ mcu.register_response(None, "query_cs1237_data", oid)
 
 A plain `lookup_command()` is deliberate. `lookup_query_command().send()` serializes request/reply handling. The capture path instead registers one temporary OID-scoped callback and queues bounded requests asynchronously.
 
-The direct response has no request sequence field. Firmware structure suggests one response per processed `query_cs1237_read`, but a controlled 250 Hz pulse produced two callbacks with identical `#sent_time` and payload while total accepted cardinality still equaled requested cardinality. The host cannot prove that those callbacks represent distinct requests or conversions. The adapter therefore rejects duplicate `(sent_time, payload)` identities, underflow, overflow, and malformed responses; caps retained accepted and rejected responses at the planned request count; and no longer treats cardinality alone as proof of one-command/one-distinct-response behavior.
+The direct response has no request sequence field. Firmware structure suggests one response per processed `query_cs1237_read`, but a controlled 250 Hz pulse produced two callbacks with identical `#sent_time` and payload while total accepted cardinality still equaled requested cardinality. The host cannot prove that those callbacks represent distinct requests or conversions. The disabled adapter rejects duplicate `(sent_time, payload)` identities, underflow, overflow, and malformed responses. Its deduplication premise is withdrawn: `#sent_time` is transport acknowledgement bookkeeping, not request or conversion identity. Future capture must preserve equal-valued/equal-timestamp responses within explicit resource bounds rather than discard them as duplicate conversions.
 
 Both `minclock` and `reqclock` are required for reproducing the characterization traces. A 100 Hz experiment using only `reqclock` sent requests in bursts, returned `40/100` responses, and showed a `0.739 s` gap. In Klipper's serial queue, `reqclock` is a requested deadline; it is not a not-before time. Equal future `minclock` and `reqclock` produced the intended pacing but do not establish conversion freshness or state safety.
 
 ## Rejected configuration-read fence
 
-`command_query_cs1237_config_r` starts at `0x0800d3fc`. It resolves the CS1237 pin descriptors, installs callback `0x0800b6b5`, and drives the SCLK GPIO mask high and low ten times at `0x0800d450` through `0x0800d464`. No recovered critical section, sensor-bus lock, periodic-acquisition pause, or ownership field serializes those transitions against the normal CS1237 timer path. The periodic path separately calls the serial acquisition routine at `0x08008eb4`.
+`query_cs1237_config_r` starts at `0x0800d738` and calls GPIO configuration-read routine `0x0800d4c8`. It is not passive and is excluded from capture preflight. Earlier addresses and clock-count attribution came from the misaligned table and are withdrawn. Safe concurrency with periodic acquisition is not established.
 
 A controlled idle diagnostic invoked only `query_cs1237_config_r` three times at one-second intervals. No direct reads, heating, motion, extrusion, homing, or probe trigger occurred. Reported values were `60`, `60`, and `255`. The third result invoked Klipper shutdown, recovery used `FIRMWARE_RESTART`, and developer diagnostics were disabled afterward. This isolates configuration reading itself as an unsafe or unreliable compatibility fence; it does not prove whether `255` was a physical register change or a misframed read.
 
@@ -256,7 +256,7 @@ A controlled idle diagnostic invoked only `query_cs1237_config_r` three times at
 
 ## Idle host-response cadence measurements
 
-Each retained run was one second with no heating, motion, extrusion, homing, probe trigger, PA change, or per-response console logging. These measurements validate host request/response delivery only; firmware disassembly indicates the direct command reads cached object state, so repeated values may represent the same ADC conversion.
+Each retained run was one second with no heating, motion, extrusion, homing, probe trigger, PA change, or per-response console logging. These measurements validate host request/response delivery only; corrected firmware analysis shows acquisition attempts with stale-buffer fallback, so repeated values do not establish whether conversions are fresh.
 
 | Requested rate | Requested | Received | Receive span | Median interval | P95 interval | Maximum interval | Median round trip |
 |---:|---:|---:|---:|---:|---:|---:|---:|
@@ -266,7 +266,7 @@ Each retained run was one second with no heating, motion, extrusion, homing, pro
 | 800 Hz | 800 | 800 | `0.999480 s` | `0.957 ms` | `2.458 ms` | `3.957 ms` | `0.563 ms` |
 | 1000 Hz | 1000 | 994 | `0.998915 s` | `0.899 ms` | `2.426 ms` | `7.038 ms` | `0.579 ms` |
 
-The idle 500 Hz path initially returned full host-response coverage with lower command pressure and less repeated-value behavior than 800 Hz. Under-load testing later found incomplete 500 Hz runs. A repeated idle campaign then completed three `50/50` runs at 50 Hz and three `250/250` runs at 250 Hz before two 250 Hz runs accepted only `245/250` and `249/250` distinct identities; the following preflight rejected a non-`60` configuration. No direct-read rate is a validated production default. The 1000 Hz path failed idle full-response-coverage requirements.
+The idle 500 Hz path initially returned full host-response coverage with lower command pressure and less repeated-value behavior than 800 Hz. Under-load testing later found incomplete 500 Hz runs. A repeated idle campaign then completed three `50/50` runs at 50 Hz and three `250/250` runs at 250 Hz before two 250 Hz runs accepted only `245/250` and `249/250` records under the now-disputed identity filter; the following preflight rejected a non-`60` configuration. No direct-read rate is a validated production default. The 1000 Hz path failed idle full-response-coverage requirements.
 
 The CS1237 remains configured for 1280 SPS while host capture requests 500 reads per second. The ADC configuration rate and host requested-read rate are separate values and are both recorded in diagnostic artifacts. A `500/500` response count does not prove 500 distinct conversions or bound the age of the cached conversion returned in each response.
 
@@ -290,17 +290,17 @@ Production analysis must classify invalid reads using a bounded invariant that r
 
 The fourth payload byte was zero for all retained responses and did not identify invalid excursions.
 
-## Live origin-cache alternative
+## Historical origin-read trials: zeroing, not passive capture
 
-The Max 4 `cs1237.so` contains `read_origin_data()` at ELF address `0xb070`. Executing the ARM64 extension against command spies showed that the method calls only `query_cs1237_update_cmd.send([oid])` and returns the signed 24-bit value. The matching `command_query_cs1237_zero` handler at `0x0800bd74` loads cached SRAM `0x20000174`, packages four bytes, and emits `query_cs1237_zero_read`; it contains no GPIO write or object-state store.
+The Max 4 `cs1237.so` contains `read_origin_data()` at ELF address `0xb070`. Executing the ARM64 extension against command spies showed that the method calls only `query_cs1237_update_cmd.send([oid])` and returns the signed 24-bit value. The corrected matching `query_cs1237_zero` handler is `0x0800dc20`: it attempts ten successful ADC reads and changes SRAM `0x20000174` and object reference `+0x88`. `0x0800bd74` belongs to the separate read-only reference command. Thus these trials repeatedly zeroed the sensor.
 
-Three controlled 40 Hz and three 50 Hz idle runs used no direct reads, configuration reads, heating, motion, extrusion, homing, or probe trigger. Every run returned all requested values. The cache changed throughout each run: 40 Hz runs had 154–159 unique values per 200 samples, and 50 Hz runs had 173–187 unique values per 250 samples. Median synchronous call duration was approximately `11.4 ms`; maximum call duration ranged from `16.131` to `77.814 ms`, and maximum start-to-start gap reached `80.280 ms`.
+Three controlled 40 Hz and three 50 Hz idle runs used no direct reads, configuration reads, heating, motion, extrusion, homing, or probe trigger. Every run returned all requested values. Returned values changed throughout each run: 40 Hz runs had 154–159 unique values per 200 samples, and 50 Hz runs had 173–187 unique values per 250 samples. Median synchronous call duration was approximately `11.4 ms`; maximum call duration ranged from `16.131` to `77.814 ms`, and maximum start-to-start gap reached `80.280 ms`.
 
-This established a live, GPIO-passive idle source but not conversion freshness. The response has no conversion timestamp and host stalls exceed one 40 Hz period. The source-gated origin command was removed from the live G-code surface after capture.
+These observations do not establish a GPIO-passive source or preserved probing reference. The response has no conversion timestamp and host stalls exceed one 40 Hz period. The source-gated origin command was removed from the live G-code surface after capture.
 
 A controlled follow-up requested 40 Hz origin-cache polling around four stationary `0.4 mm` PLA pulses at `215 °C`, K `0.020`, `0.5` to `2.0 mm/s` flow, and two accelerations. Mean call-start cadence remained approximately 40 Hz, but synchronous host stalls created local gaps up to `61.746 ms` followed by catch-up reads. Two `10 mm/s²` pulses each extruded `1.325 mm`; two `20 mm/s²` pulses each extruded `1.1375 mm`. Every run retained identical start/end XYZ `(135, 403, 200)`, restored PA `0.032` and smooth time `0.03`, rebased logical E to its original zero, and preserved loaded QIDI Box `slot4`.
 
-The four runs returned 93, 93, 87, and 87 synchronous values; unique counts were 93, 93, 87, and 86. Median call durations were `11.6–11.8 ms`; maximum call durations were `52.041`, `52.262`, `27.400`, and `56.424 ms`; maximum call-start gaps were `52.192`, `52.502`, `61.746`, and `59.950 ms`. High-flow median shifts from each run's baseline were `-7418.5`, `-11376.5`, `-9548.5`, and `-10156.5` counts. The aligned force direction and clear low/high/recovery structure establish under-force signal feasibility, but the first acceleration pair is not repeatable enough to support candidate metrics and the cached conversion's position inside each synchronous call remains unknown.
+The four runs returned 93, 93, 87, and 87 synchronous values; unique counts were 93, 93, 87, and 86. Median call durations were `11.6–11.8 ms`; maximum call durations were `52.041`, `52.262`, `27.400`, and `56.424 ms`; maximum call-start gaps were `52.192`, `52.502`, `61.746`, and `59.950 ms`. High-flow median shifts from each run's baseline were `-7418.5`, `-11376.5`, `-9548.5`, and `-10156.5` counts. The aligned force direction and clear low/high/recovery structure establish under-force signal feasibility, but the first acceleration pair is not repeatable enough to support candidate metrics and these zeroing responses cannot be treated as individual timestamped conversions.
 
 `CLEAR_FLUSH` ran after one or two measured pulses. A following ordinary relative E move advanced physical nominal E by exactly `1 mm` after logical-coordinate rebasing. Final `CLEAR_OOZE`, `CLEAR_FLUSH`, heater-off, full stock `G28`, absolute `Z=200`, and trash parking completed; Klipper remained ready and the filament source remained loaded. The temporary command and config were removed and Klipper was process-restarted. These results establish post-capture stock homing, not Z tilt or bed-mesh validation.
 
@@ -394,7 +394,7 @@ The author's technical comment [t1_oznwy4x](https://old.reddit.com/r/QidiTech3D/
 - `strings` exposed CS1237 commands resembling Klipper HX71x commands;
 - direct 640/1280 Hz MCU querying was considered possible for a later version.
 
-The first five points align with the independent Max 4 host-binary and runtime-object analysis. The final native-rate claim is not established on this firmware: the matching dictionary lacks `cs1237_data`, scheduled direct reads return cached state, and repeated captures lose distinct identities. Scheduled direct reads remain characterization evidence only.
+The first five points align with the independent Max 4 host-binary and runtime-object analysis. The final native-rate claim is not established on this firmware: the matching dictionary lacks `cs1237_data`, raw reads lack conversion timestamps, and the old response-identity filter cannot establish distinct conversion counts. Scheduled direct reads remain characterization evidence only.
 
 The comment thread also identifies validation areas already represented in `tasks.md`:
 
@@ -418,7 +418,7 @@ No Reddit source code was available at inspection time. No implementation was co
 
 ## Installer and runtime state
 
-The extra source is `installer/klipper/extras/tltg_pa_calibration.py`. `installer/package.yaml` pins SHA-256 `cbbaa9a114b88e5c3e169a088060b1deeccfd20198e899f43026ef791720af2f` for package `26.07.26.14`. Package `26.07.26.4` was used for the aborted two-acceleration direct-read follow-up; packages through `26.07.26.8` added response, ownership, shutdown, and hard-disable guards. Packages `26.07.26.9` through `26.07.26.14` retain source-gated origin-cache characterization, make the GPIO-passive origin adapter the staged preflight path, and keep every developer sensor command disabled. Packages `26.07.26.11` through `26.07.26.14` add bounded origin capture ownership, host/print-time call intervals, a lease spanning motion scheduling and restoration, idempotent release, post-release homing-state validation, and shutdown on ownership or post-state uncertainty.
+The extra source is `installer/klipper/extras/tltg_pa_calibration.py`. `installer/package.yaml` pins SHA-256 `cbbaa9a114b88e5c3e169a088060b1deeccfd20198e899f43026ef791720af2f` for package `26.07.26.14`. Package `26.07.26.4` was used for the aborted two-acceleration direct-read follow-up; packages through `26.07.26.8` added response, ownership, shutdown, and hard-disable guards. Packages `26.07.26.9` through `26.07.26.14` retain source-gated origin-cache characterization, make the origin adapter (incorrectly assumed GPIO-passive) the staged preflight path, and keep every developer sensor command disabled. Packages `26.07.26.11` through `26.07.26.14` add bounded origin capture ownership, host/print-time call intervals, a lease spanning motion scheduling and restoration, idempotent release, post-release homing-state validation, and shutdown on ownership or post-state uncertainty.
 
 Packages `26.07.26.3` through `26.07.26.14` were installed on the controlled Max 4 from validated development bundles and loaded through verified Klipper service-process restarts. The last pre-removal `26.07.26.14` state reported the expected module hash, Klipper `ready`, heater target zero, loaded QIDI Box `slot4`, public calibration disabled, and temporary, direct, configuration, and origin developer commands absent.
 
@@ -482,7 +482,7 @@ Earlier merged validation also covered optimized slicer macros and G-code path c
 | QIDI Box filament is loaded | Box 2 slot 0/global `slot4` remained loaded, synchronized, and detected through controlled PLA extrusion and cleanup. | Repeat with other physical slots and transition states. |
 | External-spool filament is loaded | Box-disabled and synchronized `slot16` paths classify as `external`. | Controlled external-spool extrusion remains. |
 | Capture covers the measured motion window | Controlled captures bracketed scheduled direct-trapq transitions and retained send/receive timing. | Cached-conversion age and print-time conversion bounds remain unknown. |
-| Conversion freshness is inconclusive | Under-load captures are retained without promoting response receive time to conversion time, and public reporting remains disabled. | Hardware invariant for cached conversion age remains unknown. |
+| Conversion freshness is inconclusive | Under-load captures are retained without promoting response receive time to conversion time, and public reporting remains disabled. | Raw-read stale frequency and usable timing uncertainty remain unknown. |
 | Raw processing respects host limits | Repeated idle 250 Hz runs degraded from `250/250` to `245/250` and `249/250`; the path is disabled. | Replace or repair acquisition before rate selection. |
 | Invalid direct-read excursions are detected | Near-zero and isolated large excursions were retained during force transitions. | A force-safe raw-count classifier remains unknown. |
 | Timing uncertainty exceeds tolerance | Coverage, gap, and timing-residual gates return stable inconclusive reasons. | Thresholds require conversion-time evidence. |
@@ -515,7 +515,7 @@ Earlier merged validation also covered optimized slicer macros and G-code path c
 
 The following findings remain unresolved after the controlled `0.4 mm` PLA run:
 
-1. A non-homing acquisition and stock-state transaction that does not rely on cached direct-response identity or repeated `query_cs1237_config_r` calls.
+1. A bounded nonblocking raw-read transaction with one outstanding request, no host retransmission or timestamp/payload deduplication, and read-only homing/reference checks. Exclude origin zeroing, ADC configuration, and periodic-start commands.
 2. A bound on conversion age and conversion-time error relative to scheduled requests and Klipper print time.
 3. A raw/timing invariant that rejects invalid reads during real force transitions without suppressing valid signal edges.
 4. Production direct-trapq ownership, queue drain, and real cancellation/shutdown behavior; bounded generation and ordinary E continuity passed.

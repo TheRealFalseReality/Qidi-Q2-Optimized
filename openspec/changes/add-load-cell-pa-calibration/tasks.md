@@ -1,7 +1,9 @@
+The acquisition assumptions are corrected in [local firmware findings](../qualify-raw-adc-pa-capture/local-firmware-findings.md). Historical completed implementation tasks do not qualify the disabled origin adapter. The follow-up change owns offline raw-collector work and separately authorized staged hardware qualification; this change retains the broader calibration lifecycle.
+
 ## 1. Hardware Contract and Validation Fixtures
 
 - [x] 1.1 Add a developer-only capture harness that records bounded `query_cs1237_data` payloads, MCU receive timing, ADC/requested sample rates, and queued motion markers without exposing a public PA candidate.
-- [ ] 1.2 Complete the sensor contract in `reverse-engineering.md`, including cached-conversion freshness and print-time alignment bounds, the hardware-valid classifier for direct-read excursions under force, capture behavior during trapq work, and post-capture stock probe verification.
+- [ ] 1.2 Complete the sensor contract in `../qualify-raw-adc-pa-capture/reverse-engineering.md`, including raw-read stale behavior and print-time alignment bounds, the hardware-valid classifier for direct-read excursions under force, capture behavior during trapq work, and post-capture stock probe verification.
 - [x] 1.3 Statically characterize the installed extruder trapq append ABI, PA eligibility field, nominal E bookkeeping, smoothing context, queue finalization, and cancellation contract for stationary PA-enabled E-only moves; physical behavior remains covered by tasks 5.2 and 5.5.
 - [ ] 1.4 Measure idle, heated-idle, normal E-only, stationary direct-trapq low/high/low, and `CLEAR_FLUSH` traces to establish polarity, baseline drift, flap-motion contamination, settling time, and signal-to-noise behavior.
 - [ ] 1.5 Validate and record full-homing behavior, absolute `Z=200` clearance, trash-chute park position, nozzle-specific flow and extrusion limits for `0.2`, `0.4`, `0.6`, and `0.8` mm nozzles, one-or-two-pulse clearing cadence, safe completion state, and abort conditions.
@@ -20,7 +22,7 @@
 
 ## 3. Klipper Sensor and Calibration Integration
 
-- [ ] 3.1 Complete the narrow QIDI `probe_air`/CS1237 compatibility adapter with a hardware-validated non-homing acquisition and stock-state transaction; cached direct reads and repeated `query_cs1237_config_r` checks are rejected.
+- [ ] 3.1 Complete the narrow QIDI `probe_air`/CS1237 compatibility adapter with a hardware-validated non-homing acquisition and stock-state transaction; origin zeroing and repeated `query_cs1237_config_r` checks are excluded. Raw-read qualification is tracked in `qualify-raw-adc-pa-capture`.
 - [x] 3.2 Complete idempotent capture cleanup that unregisters owned handlers, releases exclusive ownership, accounts for every queued request, rejects concurrent probe/calibration ownership, and proves stock probe calibration and thresholds remain untouched.
 - [x] 3.3 Complete side-effect-free calibration preflight for idle print state, required `TEMP` and supported `NOZZLE`, registered chute commands, compatible sensor and trapq interfaces, corroborated toolhead/QIDI loaded-filament status, QIDI Box/external-spool preservation, and nozzle-specific resource bounds.
 - [ ] 3.4 Implement setup ordering that performs full stock `G28`, moves to absolute `Z=200`, parks with `OPTIMIZED_MOVE_TO_TRASH`, sets and stabilizes the requested temperature, and starts capture only after positioning settles.
@@ -58,5 +60,5 @@
 - [x] 6.5 Run `python3 scripts/build_installer_bundle.py --output-dir dist --channel dev --build-id local --smoke-test` and verify the bundle contains the managed Python extra and PA macro/config.
 - [x] 6.6 Run `python3 scripts/check_gcode_paths.py --write` and `python3 scripts/check_gcode_paths.py` if the concrete start-path command graph changes; otherwise record why PA calibration is outside start-print branch invariants.
 - [x] 6.7 Review the implementation against every `load-cell-pa-calibration` scenario and record any remaining hardware-validation gap before marking the change complete.
-- [x] 6.8 Preserve host/MCU reverse engineering, artifact hashes, command lifecycle, rejected acquisition paths, live cadence traces, invalid-read evidence, safety decisions, and unresolved validation work in `reverse-engineering.md`, `evidence/direct-read-cadence.json`, and `openspec/observations/qidi-load-cell.md` using the required evidence qualifiers.
-- [x] 6.9 Remove the temporary local analysis-workspace inventory from `reverse-engineering.md`; retain only hashes, provenance, durable evidence, and reproducible acquisition instructions.
+- [x] 6.8 Preserve host/MCU reverse engineering, artifact hashes, command lifecycle, rejected acquisition paths, live cadence traces, invalid-read evidence, safety decisions, and unresolved validation work in `../qualify-raw-adc-pa-capture/reverse-engineering.md`, `../qualify-raw-adc-pa-capture/evidence/direct-read-cadence.json`, and `../qualify-raw-adc-pa-capture/qidi-load-cell.md` using the required evidence qualifiers.
+- [x] 6.9 Remove the temporary local analysis-workspace inventory from `../qualify-raw-adc-pa-capture/reverse-engineering.md`; retain only hashes, provenance, durable evidence, and reproducible acquisition instructions.

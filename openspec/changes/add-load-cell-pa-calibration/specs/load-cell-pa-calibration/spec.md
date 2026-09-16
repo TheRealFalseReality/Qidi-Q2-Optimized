@@ -69,18 +69,15 @@ The system SHALL access the stock `probe_air` CS1237 acquisition path through a 
 - **THEN** the adapter permits bounded sensor capture only through that validated transaction
 - **AND** the stock probe configuration, calibration, zero, trigger threshold, and endstop behavior remain unchanged
 
-#### Scenario: Cached direct reads are insufficient
-- **WHEN** `query_cs1237_read` returns cached object state without request identity or conversion timestamps
+#### Scenario: Raw response cadence is insufficient
+- **WHEN** `query_cs1237_read` attempts acquisition but can return stale data without conversion identity or timestamps
 - **THEN** the adapter does not treat response cadence or cardinality as proof of conversion freshness
 - **AND** public and developer capture remain disabled
 
-#### Scenario: GPIO-passive origin cache remains partially validated
-- **WHEN** `read_origin_data()` returns changing cached values without driving sensor pins
-- **THEN** the adapter may retain that path for bounded source-gated characterization at no more than 50 Hz and 250 calls
-- **AND** it validates capture bounds and acquires exclusive process-local ownership before pressure-advance mutation or trapq queueing
-- **AND** it records host and estimated print-time call intervals, retains ownership through capture, owned-motion completion, and temporary-state restoration, then verifies homing state after release
-- **AND** an unverifiable post-capture homing state or ownership loss forces shutdown before subsequent probing
-- **AND** public capture remains disabled until cached-conversion age, deterministic schedule alignment, invalid-value classification, and candidate repeatability are hardware-validated
+#### Scenario: Origin zeroing is excluded from capture
+- **WHEN** an acquisition backend uses `read_origin_data()` or another operation that changes the probing reference
+- **THEN** the adapter rejects that backend for calibration capture
+- **AND** historical successful captures or later homing do not establish reference preservation
 
 #### Scenario: Configuration reads are not side-effect-free
 - **WHEN** `query_cs1237_config_r` drives the live CS1237 clock without a validated serialization contract
@@ -173,7 +170,7 @@ The system SHALL collect bounded CS1237 samples through a validated non-homing a
 #### Scenario: Capture covers the measured motion window
 - **WHEN** a calibration sweep runs
 - **THEN** sensor capture begins before the first measured transition and ends after the final measured transition completes
-- **AND** each analyzed sample is assigned a time relative to the queued transition schedule using a validated bound on cached-conversion age rather than assuming response receive time equals ADC conversion time
+- **AND** each analyzed sample is assigned a time relative to the queued transition schedule using a validated bound on conversion age rather than assuming response receive time equals ADC conversion time
 
 #### Scenario: Conversion freshness is inconclusive
 - **WHEN** duplicate responses, cached-value behavior, firmware timing, or physical force-response delay prevents the system from bounding ADC conversion age and alignment error
