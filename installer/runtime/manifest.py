@@ -374,6 +374,7 @@ def _parse_system_optimizations(raw: dict[str, Any]) -> SystemOptimizationsSpec 
     services_raw = _require_mapping(system_raw, "services")
     gifs_raw = _require_mapping(system_raw, "qidiclient_static_gifs")
     moonraker_metadata_raw = _require_mapping(system_raw, "moonraker_metadata_3mf")
+    moonraker_file_manager_raw = _require_mapping(system_raw, "moonraker_file_manager")
     rockchip_raw = _require_mapping(system_raw, "rockchip_root_sync")
     optional_raw = services_raw.get("optional_disable", [])
     if not isinstance(optional_raw, list):
@@ -417,6 +418,10 @@ def _parse_system_optimizations(raw: dict[str, Any]) -> SystemOptimizationsSpec 
         moonraker_metadata_3mf=SystemMoonrakerMetadata3mfSpec(
             file=_validate_absolute_path(_require_str(moonraker_metadata_raw, "file")),
             restart_service=_require_str(moonraker_metadata_raw, "restart_service"),
+        ),
+        moonraker_file_manager=SystemMoonrakerMetadata3mfSpec(
+            file=_validate_absolute_path(_require_str(moonraker_file_manager_raw, "file")),
+            restart_service=_require_str(moonraker_file_manager_raw, "restart_service"),
         ),
         rockchip_root_sync=_parse_rockchip_root_sync(rockchip_raw),
     )

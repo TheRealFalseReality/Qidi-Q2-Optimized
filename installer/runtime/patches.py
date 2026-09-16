@@ -19,7 +19,7 @@ def classify_install_patch(current: str, patch: PatchSpec, firmware_version: str
         classification = INSTALL_NOOP_DESIRED
     elif current == variant.expected:
         classification = INSTALL_APPLIED
-    elif current == "65" and _prior_managed_65(prior_state, patch):
+    elif _prior_managed_value(current, prior_state, patch):
         classification = INSTALL_APPLIED
     else:
         classification = USER_MODIFIED
@@ -36,14 +36,20 @@ def classify_install_patch(current: str, patch: PatchSpec, firmware_version: str
 
 
 
-def _prior_managed_65(prior_state, patch: PatchSpec) -> bool:
-    if prior_state is None or patch.id not in {"stepper_x_homing_speed", "stepper_y_homing_speed"}:
+def _prior_managed_value(current: str, prior_state, patch: PatchSpec) -> bool:
+    prior_value = {
+        "stepper_x_homing_speed": "100",
+        "stepper_y_homing_speed": "100",
+        "stepper_x_homing_retract_speed": "1000.0",
+        "stepper_y_homing_retract_speed": "1000.0",
+    }.get(patch.id)
+    if prior_value is None or current != prior_value or prior_state is None:
         return False
     return any(
         entry.id == patch.id
         and entry.target_tuple == patch.target_tuple
         and entry.expected == select_patch_variant(patch, prior_state.runtime_firmware).expected
-        and entry.desired == "65"
+        and entry.desired == prior_value
         and entry.install_result in {INSTALL_APPLIED, INSTALL_NOOP_DESIRED}
         for entry in prior_state.patch_ledger
     )

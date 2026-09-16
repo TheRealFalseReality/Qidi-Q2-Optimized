@@ -1,5 +1,49 @@
 # Changelog
 
+## 26.09.15.2
+- Integrated the guarded load-cell PA calibration extra with the current installer and firmware support. `TLTG_PA_CALIBRATE` requires explicit temperature and nozzle inputs but remains disabled before any physical action; no PA candidate is applied or saved.
+- Preserved hash-pinned extra deployment, process-restart verification, backup, restore, and uninstall ownership checks while migrating historical extra hashes into the cumulative compatibility envelope. Unknown package identities, versions, payload hashes, and live drift remain rejected.
+- Retained the staged origin-cache capture and stationary-extrusion analysis for development only. Sensor freshness and repeatability remain unvalidated; autopa is not installed or bundled.
+
+## 26.09.15.1
+- Fixed installer QIDI Box tool-slot string quoting so missing mappings and approved mapping corrections save without Klipper literal-parsing errors, including when Box enablement is declined.
+- Fixed manual 3MF metadata rescans to use the archive extractor without deleting QIDI thumbnail files. Rescans join pending extraction instead of duplicating it; failures preserve prior metadata and return an error. The 3MF rescan path rejects escaped, reserved, or missing archives; ordinary G-code rescanning remains unchanged.
+- Added a guarded Moonraker file-manager patch to normal install and update, including when optional OS optimizations are skipped. Unchanged 3MF files reuse cached metadata instead of re-extracting at every startup or filesystem notification; file size, modification time, extractor changes, and object-processing policy invalidate the cache.
+- Unified 3MF and G-code metadata queue processing, fixed a cached-request loop that could hang Moonraker, and removed repeated whole-queue copies. Skipped extraction leaves cached last-printed fields and thumbnails intact.
+- Retained byte-for-byte source backups, checked Moonraker restarts, and preserved modified files during reconciliation and uninstall. The first restart rebuilds unstamped 3MF metadata once; directory enumeration and processing of new or changed archives still occur.
+
+## 26.09.09.1
+- Replaced per-version upgrade metadata with one validated list of allowed patch targets and source hashes. Supported historical package versions remain explicitly listed and can upgrade directly.
+- Unified configuration change planning for install, uninstall, and restore. The installer rejects files changed since planning, requires an idle printer before restore, and rolls back interrupted, uncommitted writes without replacing saved-variable files.
+- Kept host optimizations in the installer flow and limited recovery-state growth across repeated checks. Recovery state retains the policy, original restoration copies, latest outcomes, and evidence needed for Rockchip recovery. Host restore preserves user-modified state.
+- Moved host service and mount simulation into test fixtures. Plain and Rich output share installer summaries; Python handles command aliases, help, version reporting, and argument validation.
+- Fixed a `NameError` during idle QIDI Box topology reconciliation so automatic-update checks can initialize missing tool-slot mappings after the Box count changes while preserving custom mappings.
+- Saved installer defaults through Klipper's `SAVE_VARIABLE` command via Moonraker instead of replacing a stale `saved_variables.cfg` snapshot. Updates and already-current enrolled auto-update checks repair only missing defaults; existing retention values and non-empty custom QIDI Box tool-slot mappings stay unchanged.
+- Blocked further installer or updater work when saved-variable verification fails after a source-patch restart. The expected values remain recorded until Klipper confirms them; dry-runs preserve the record and successful uninstall removes it. Moonraker does not support compare-and-set, so a concurrent update after the final live eligibility check can still win.
+- Reduced the X and Y first-pass homing speed from 100 mm/s to 65 mm/s and the homing retraction speed from 1,000 mm/s to 500 mm/s; retained the existing 55 mm/s second pass.
+- Fresh QIDI Box and external-spool print-start cleanup preserves every existing cooldown wipe while using the stock mixed-speed pre-scrape pattern. After the cooled rear-bed rectangle and three-circle scrape, the nozzle returns safely to the chute for four 200 mm/s finishing cycles and waste release before leveling.
+- Retained-filament starts, non-start purge cleanup, unload cleanup, and staged end cleanup use four back-and-forth finishing passes at 200 mm/s. Manual loading, vendor commands, purge quantities, temperature gates, and slicer filament-change wiping remain unchanged.
+- Added OrcaSlicer 2.4.2+ filament-profile minimum chamber temperature support so leveling and printing can begin at the minimum while heating continues toward the target, including staggered startup heating.
+- Preserved existing chamber waits for zero or omitted minimums, QIDI Studio, and independent slicer-profile or optimized-macro updates.
+- Exposed AP-board SoC, toolhead MCU, and mainboard MCU temperatures to Moonraker and Fluidd.
+
+## 26.08.29.1
+- Restored the stock QIDI Y395–Y397 rear-bed nozzle scrape footprint after the cable-chain orientation traverse.
+- Prevented intentional end-of-print QIDI Box unloading from triggering a filament-runout pause before heater shutdown, bed lowering, nozzle wiping, and final print cleanup.
+
+## 26.08.09.2
+- Added the persistent `tltg_keep_loaded_between_prints` setting for end-of-print QIDI Box filament handling. Value `1` retains filament; `0` or a missing setting cuts and unloads it.
+- The installer sets the preference to `1` when it is missing and preserves the user's existing value during updates.
+- Added optional bed, chamber, then nozzle startup heating controlled by `tltg_staggered_start_heating`, with a configurable inter-stage dwell.
+- Preserved no-argument `OPTIMIZED_PRINT_START_HOME` compatibility while updated slicer starts pass explicit heater targets.
+
+## 26.08.09.1
+- Added the persistent `tltg_start_bed_mesh_profile` setting so print start can load a named Klipper bed-mesh profile instead of calibrating a new mesh.
+- Kept fresh adaptive KAMP calibration as the default when the setting is missing or empty. A configured profile must exist or Klipper stops print preparation.
+
+## 26.08.06.3
+- Updated the load-cell PA development branch with firmware `01.01.06.05` support, installer recovery, and the rear-scrape and fan-polling changes documented below. Physical PA calibration remained disabled.
+
 ## 26.08.06.2
 - Reinstall enrolled optimized configuration automatically after QIDI firmware cleanup removes config-local installer state, while keeping unenrolled and disabled update checks non-mutating.
 - Tuned hotend-fan tachometer polling to 0.75 ms across supported firmware, retaining margin for the measured 13,553 RPM maximum while reducing THR polling from firmware 01.01.06.05.

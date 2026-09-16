@@ -1,3 +1,5 @@
+![Tuba Makes](.github/images/tuba-makes-logo.png)
+
 # Qidi Max 4 Optimized
 
 Opinionated and Optimized Klipper macros and slicer machine GCode for the QIDI Max 4.
@@ -47,6 +49,16 @@ Run one auto-update check manually:
 ~/tltg-optimized-macros/auto-update.sh --run
 ```
 
+### Moonraker 3MF metadata cache
+
+Install and update patch recognized QIDI Moonraker source so unchanged 3MF files reuse their metadata instead of being re-extracted at every startup. This applies even when optional OS optimizations are skipped. Moonraker restarts when its file-manager patch changes; installation requires an idle printer.
+
+The first restart rebuilds existing 3MF metadata once. Later scans still enumerate directories, but only new, changed, or invalidated archives need extraction. Changing the metadata extractor or object-processing policy invalidates the cache. This does not bypass print preparation or archive decompression needed by the printer itself.
+
+Manual 3MF metadata rescans use the archive extractor and keep existing QIDI thumbnail files. A rescan joins extraction already pending for the same archive rather than starting another copy; failures report an error and preserve prior metadata. Ordinary G-code rescans are unchanged.
+
+Unrecognized source is preserved and reported. Uninstall can restore the original source through its system-restoration prompt; files modified after installation are preserved.
+
 ### QIDI Box temperature from Fluidd
 
 The installer adds `TLTG_SET_BOX_TEMP`, a macro for setting the QIDI Box heater target because Qidi's Fluidd config is incapable of setting `heater_box1` correctly.
@@ -84,6 +96,68 @@ TLTG_RESET_TOOL_MAPPINGS
 
 `TLTG_RESET_TOOL_MAPPINGS` restores QIDI Box tool-to-slot identity mappings while the printer is idle. It is rejected while printing or paused.
 
+### Print-start bed mesh
+
+Each optimized print start calibrates a fresh adaptive KAMP mesh by default. To reuse an existing Klipper bed-mesh profile for every optimized start, save its exact name from the Klipper console:
+
+```gcode
+SAVE_VARIABLE VARIABLE=tltg_start_bed_mesh_profile VALUE='"default"'
+```
+
+Restore fresh adaptive calibration by saving an empty value:
+
+```gcode
+SAVE_VARIABLE VARIABLE=tltg_start_bed_mesh_profile VALUE='""'
+```
+
+The setting applies to existing sliced files and requires no change to slicer gcode. The console reports whether start preparation is loading the named profile or calibrating a fresh adaptive mesh. A configured profile must already exist; Klipper stops print preparation if it cannot load the name.
+
+### Minimum chamber temperature
+
+With OrcaSlicer 2.4.2 or later, use the updated `orcaslicer_gcode/start.gcode` and set the filament profile's chamber **Target** and **Minimal** temperatures. For example, Target `60°C` and Minimal `50°C` allow leveling and printing once the chamber reaches `50°C`, while heating continues toward `60°C`. The initial tool's filament supplies the minimum; values above the target are capped at the target.
+
+Minimal `0` keeps the existing target-minus-3°C wait. Older start G-code and QIDI Studio retain that behavior with updated macros; updated Orca start G-code also works with older optimized macros, which ignore the minimum and retain their existing wait. Both the start G-code and optimized macros must be updated to use the shorter wait.
+
+The minimum also applies to the chamber stage of staggered heating. A lower minimum allows nozzle heating to begin while the chamber is still heating toward its target.
+
+### Staggered print-start heating
+
+Staggered heating is disabled by default. Enable bed, chamber, then nozzle warm-up with a 10-second dwell between active stages:
+
+```gcode
+SAVE_VARIABLE VARIABLE=tltg_staggered_start_heating VALUE=1
+SAVE_VARIABLE VARIABLE=tltg_staggered_start_heating_dwell_seconds VALUE=10
+```
+
+Set the dwell to another non-negative number of seconds, or use `0` to retain ordered heating without fixed dwell time. To disable staggered heating:
+
+```gcode
+SAVE_VARIABLE VARIABLE=tltg_staggered_start_heating VALUE=0
+```
+
+You will need to slice files with the latest slicer gcode from this repo (or Orca cloud).
+
+### End-of-print filament handling
+
+The installer sets `tltg_keep_loaded_between_prints` to `1` if the setting does not already exist. That makes filament retention the default after installation.
+
+- `1`: Keep the current QIDI Box filament loaded after a completed print.
+- `0` or not set: Cut and unload the filament after a completed print.
+
+To disable filament retention and use the stock-style cut-and-unload behavior:
+
+```gcode
+SAVE_VARIABLE VARIABLE=tltg_keep_loaded_between_prints VALUE=0
+```
+
+To turn filament retention back on:
+
+```gcode
+SAVE_VARIABLE VARIABLE=tltg_keep_loaded_between_prints VALUE=1
+```
+
+The installer preserves an existing setting during updates. The setting survives Klipper restarts, works with existing sliced files, and does not require any slicer G-code changes.
+
 ### Filament runout sensor
 
 ```gcode
@@ -107,11 +181,9 @@ The console identifies the toolhead sensor trip and the active pause policy.
 
 You will need to manually copy the machine GCode to your slicer of choice to take advantage of the optimized path.  The stock print path remains in place for backwards compatibility, safety, and general user happiness :)
 
-Use the pack that matches your slicer. The two packs are functionally aligned, but their placeholder syntax is different due to variable type differences.
+Use the pack that matches your slicer. The two packs are functionally aligned, but their placeholder syntax differs because of variable type differences.
    - OrcaSlicer: `orcaslicer_gcode/`
    - QIDI Studio: `qidistudio_gcode/`
-
-Use the pack that matches your slicer. The two packs are functionally aligned, but their placeholder syntax is different.
 
 ## Uninstall
 

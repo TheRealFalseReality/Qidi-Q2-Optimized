@@ -11,6 +11,12 @@ from pathlib import Path
 from unittest import mock
 
 from installer.runtime import klipper_cfg
+from installer.runtime.box_enablement import (
+    SavedVariablePersistenceError,
+    maybe_reconcile_tool_slots_after_box_count_change,
+    maybe_write_required_tool_slot_variables,
+    saved_variable_verify_marker_path,
+)
 from installer.runtime.auto_update import (
     AutoUpdateError,
     LOCK_HELD_ENV,
@@ -29,7 +35,7 @@ from installer.runtime.backup import (
 )
 from installer.runtime.cli import main as cli_main, resolve_runtime_paths
 from installer.runtime.compatibility import load_supported_upgrade_sources
-from installer.runtime.errors import ExternalFileError
+from installer.runtime.errors import ActivePrintError, ExternalFileError, PrinterStateError
 from installer.runtime.manifest import load_manifest
 from installer.runtime.models import (
     InstalledState,
@@ -102,12 +108,20 @@ class SourcePatchLifecycleMatrixTests(unittest.TestCase):
         source.write_bytes(stock_source)
         return printer_root, paths, stock_source
 
+    def _fixture_urlopen(self, printer_root, *, state="standby"):
+        return moonraker_urlopen(
+            state,
+            saved_variables_path=printer_root / "config/saved_variables.cfg",
+        )
+
     def _run_install(self, paths, *, environ=None):
         return run_install(
             paths,
             self.manifest,
             PlainReporter(io.StringIO()),
-            urlopen=moonraker_urlopen(),
+            urlopen=moonraker_urlopen(
+                saved_variables_path=paths.config_root / "saved_variables.cfg"
+            ),
             environ=environ,
         )
 
@@ -119,16 +133,13 @@ class SourcePatchLifecycleMatrixTests(unittest.TestCase):
                 value,
             )
 
-    def test_pa_historical_versions_retain_source_patch_provenance(self):
-        expected = self.compatibility.versions["26.07.26.2"].source_patches
-        for revision in range(3, 15):
-            with self.subTest(revision=revision):
-                self.assertEqual(
-                    self.compatibility.versions[
-                        f"26.07.26.{revision}"
-                    ].source_patches,
-                    expected,
-                )
+    def _assert_homing_retract_speed(self, printer_root: Path, value: str) -> None:
+        text = (printer_root / "config/printer.cfg").read_text(encoding="utf-8")
+        for stepper in ("stepper_x", "stepper_y"):
+            self.assertEqual(
+                klipper_cfg.resolve_unique_option(text, stepper, "homing_retract_speed").value,
+                value,
+            )
 
     def test_fresh_stock_install_applies_source_and_records_preimage_for_all_variants(self):
         for firmware, source_variant, desired_sha256 in SOURCE_CASES:
@@ -138,7 +149,8 @@ class SourcePatchLifecycleMatrixTests(unittest.TestCase):
                 )
                 self._run_install(paths)
 
-                self._assert_homing_speed(printer_root, "100")
+                self._assert_homing_speed(printer_root, "65")
+                self._assert_homing_retract_speed(printer_root, "500.0")
                 self.assertEqual(
                     hashlib.sha256(
                         (paths.managed_klipper_root / "klippy/extras/homing.py").read_bytes()
@@ -204,6 +216,30 @@ class SourcePatchLifecycleMatrixTests(unittest.TestCase):
         self.assertFalse((paths.config_root / "tltg_optimized_state.yaml").exists())
         self.assertFalse((paths.config_root / "tltg-optimized-macros").exists())
 
+    def test_install_initializes_absent_filament_retention_and_preserves_zero(self):
+        for existing, expected in ((None, "1"), ("0", "0")):
+            with self.subTest(existing=existing):
+                printer_root, paths, _ = self._fixture("01.01.06.03")
+                saved_variables_path = printer_root / "config/saved_variables.cfg"
+                if existing is not None:
+                    text = saved_variables_path.read_text(encoding="utf-8")
+                    saved_variables_path.write_text(
+                        text + f"tltg_keep_loaded_between_prints = {existing}\n",
+                        encoding="utf-8",
+                    )
+
+                self._run_install(paths)
+
+                saved_variables = saved_variables_path.read_text(encoding="utf-8")
+                self.assertEqual(
+                    klipper_cfg.resolve_unique_option(
+                        saved_variables,
+                        "Variables",
+                        "tltg_keep_loaded_between_prints",
+                    ).value,
+                    expected,
+                )
+
     def test_noninteractive_box_reconciliation_adds_missing_mappings_without_replacing_existing_ones(self):
         printer_root, paths, _ = self._fixture("01.01.06.03")
         saved_variables_path = printer_root / "config/saved_variables.cfg"
@@ -241,7 +277,214 @@ class SourcePatchLifecycleMatrixTests(unittest.TestCase):
             ),
         )
 
-    def test_2606151_upgrade_migrates_65_and_adds_source_ledger_for_all_variants(self):
+        saved_variables_path.write_text(
+            klipper_cfg.set_option_value(saved_variables, "Variables", "box_count", "3"),
+            encoding="utf-8",
+        )
+        reporter = PlainReporter(io.StringIO())
+        urlopen = self._fixture_urlopen(printer_root)
+        self.assertTrue(maybe_reconcile_tool_slots_after_box_count_change(
+            paths=paths, reporter=reporter, urlopen=urlopen
+        ))
+        reconciled = saved_variables_path.read_text(encoding="utf-8")
+        for tool in range(12):
+            self.assertEqual(
+                klipper_cfg.resolve_unique_option(
+                    reconciled, "Variables", f"value_t{tool}"
+                ).value,
+                "'slot3'" if tool == 1 else f"'slot{tool}'",
+            )
+        self.assertFalse(maybe_reconcile_tool_slots_after_box_count_change(
+            paths=paths, reporter=reporter, urlopen=urlopen
+        ))
+        self.assertEqual(saved_variables_path.read_text(encoding="utf-8"), reconciled)
+
+    def test_missing_mapping_recheck_preserves_new_nonempty_choice(self):
+        printer_root, paths, _ = self._fixture("01.01.06.03")
+        saved_variables_path = printer_root / "config/saved_variables.cfg"
+        saved_variables_path.write_text(
+            "[Variables]\nbox_count = 1\nenable_box = 1\n",
+            encoding="utf-8",
+        )
+        base_urlopen = self._fixture_urlopen(printer_root)
+        object_queries = 0
+        gcode_scripts = []
+
+        def urlopen(request, timeout=0):
+            nonlocal object_queries
+            url = getattr(request, "full_url", str(request))
+            if "printer/objects/query?save_variables" in url:
+                object_queries += 1
+                if object_queries == 2:
+                    saved_variables_path.write_text(
+                        saved_variables_path.read_text(encoding="utf-8")
+                        + "value_t0 = 'operator-choice'\n",
+                        encoding="utf-8",
+                    )
+            if "/printer/gcode/script" in url:
+                gcode_scripts.append(json.loads(request.data.decode("utf-8"))["script"])
+            return base_urlopen(request, timeout=timeout)
+
+        self.assertTrue(
+            maybe_write_required_tool_slot_variables(
+                paths=paths, reporter=PlainReporter(io.StringIO()), urlopen=urlopen
+            )
+        )
+        self.assertFalse(any("VARIABLE=value_t0" in script for script in gcode_scripts))
+        self.assertEqual(
+            klipper_cfg.resolve_unique_option(
+                saved_variables_path.read_text(encoding="utf-8"), "Variables", "value_t0"
+            ).value,
+            "'operator-choice'",
+        )
+
+    def test_source_restart_rejects_changed_authorized_saved_values(self):
+        printer_root, paths, _ = self._fixture("01.01.06.03")
+        saved_variables_path = printer_root / "config/saved_variables.cfg"
+        saved_variables_path.write_text(
+            "[Variables]\nbox_count = 1\nenable_box = 0\nvalue_t0 = 'custom0'\n",
+            encoding="utf-8",
+        )
+        base_urlopen = self._fixture_urlopen(printer_root)
+
+        def urlopen(request, timeout=0):
+            url = getattr(request, "full_url", str(request))
+            response = base_urlopen(request, timeout=timeout)
+            if url.endswith("/machine/services/restart"):
+                saved_variables_path.write_text(
+                    saved_variables_path.read_text(encoding="utf-8").replace(
+                        "enable_box = 1", "enable_box = 0"
+                    ),
+                    encoding="utf-8",
+                )
+            return response
+
+        with self.assertRaises(SavedVariablePersistenceError):
+            run_install(
+                paths,
+                self.manifest,
+                PlainReporter(io.StringIO()),
+                input_stream=io.StringIO("Y\nN\n"),
+                urlopen=urlopen,
+            )
+
+        with self.assertRaises(SavedVariablePersistenceError):
+            run_install(
+                paths,
+                self.manifest,
+                PlainReporter(io.StringIO()),
+                input_stream=io.StringIO("Y\nN\n"),
+                urlopen=urlopen,
+            )
+
+        marker_path = saved_variable_verify_marker_path(paths)
+        expected_marker = json.loads(marker_path.read_text(encoding="utf-8"))
+        self.assertEqual(expected_marker["schema_version"], 1)
+        self.assertEqual(expected_marker["values"]["enable_box"], "1")
+        self.assertTrue(
+            (paths.managed_klipper_root / "klippy/extras/homing.py").is_file()
+        )
+
+        with self.assertRaises(SavedVariablePersistenceError):
+            self._run_install_with_urlopen(paths, self._fixture_urlopen(printer_root))
+        self.assertEqual(
+            json.loads(marker_path.read_text(encoding="utf-8")), expected_marker
+        )
+
+        saved_variables_path.write_text(
+            saved_variables_path.read_text(encoding="utf-8").replace(
+                "enable_box = 0", "enable_box = 1"
+            ),
+            encoding="utf-8",
+        )
+        marker_bytes = marker_path.read_bytes()
+        run_install(
+            paths,
+            self.manifest,
+            PlainReporter(io.StringIO()),
+            dry_run=True,
+            urlopen=self._fixture_urlopen(printer_root),
+        )
+        self.assertEqual(marker_path.read_bytes(), marker_bytes)
+
+        saved_variables_path.write_text(
+            saved_variables_path.read_text(encoding="utf-8").replace(
+                "enable_box = 1", "enable_box = 0"
+            ),
+            encoding="utf-8",
+        )
+        with mock.patch(
+            "installer.runtime.uninstall.atomic_delete", side_effect=OSError("marker delete failed")
+        ):
+            with self.assertRaises(OSError):
+                run_uninstall(
+                    paths,
+                    self.manifest,
+                    self.compatibility,
+                    PlainReporter(io.StringIO()),
+                    input_stream=io.StringIO("Y\n"),
+                    urlopen=self._fixture_urlopen(printer_root),
+                )
+        self.assertEqual(marker_path.read_bytes(), marker_bytes)
+        self.assertTrue((printer_root / "config/tltg_optimized_state.yaml").exists())
+
+        run_uninstall(
+            paths,
+            self.manifest,
+            self.compatibility,
+            PlainReporter(io.StringIO()),
+            input_stream=io.StringIO("Y\n"),
+            urlopen=self._fixture_urlopen(printer_root),
+        )
+        self.assertFalse(marker_path.exists())
+        self.assertFalse((printer_root / "config/tltg_optimized_state.yaml").exists())
+
+        self._run_install_with_urlopen(paths, self._fixture_urlopen(printer_root))
+        self.assertTrue((printer_root / "config/tltg_optimized_state.yaml").exists())
+
+        saved_variables = saved_variables_path.read_text(encoding="utf-8")
+        self.assertEqual(
+            klipper_cfg.resolve_unique_option(saved_variables, "Variables", "value_t0").value,
+            "'custom0'",
+        )
+        self.assertEqual(
+            klipper_cfg.resolve_unique_option(
+                saved_variables, "Variables", "tltg_keep_loaded_between_prints"
+            ).value,
+            "1",
+        )
+        for tool in range(1, 4):
+            self.assertEqual(
+                klipper_cfg.resolve_unique_option(
+                    saved_variables, "Variables", f"value_t{tool}"
+                ).value,
+                f"'slot{tool}'",
+            )
+
+    def test_saved_variable_write_failure_stops_install_without_file_fallback(self):
+        printer_root, paths, _ = self._fixture("01.01.06.03")
+        saved_variables_path = printer_root / "config/saved_variables.cfg"
+        before = saved_variables_path.read_bytes()
+        base_urlopen = self._fixture_urlopen(printer_root)
+
+        def failing_urlopen(request, timeout=0):
+            if "/printer/gcode/script" in getattr(request, "full_url", str(request)):
+                raise OSError("Moonraker unavailable")
+            return base_urlopen(request, timeout=timeout)
+
+        with self.assertRaises(SavedVariablePersistenceError):
+            self._run_install_with_urlopen(paths, failing_urlopen)
+        self.assertEqual(saved_variables_path.read_bytes(), before)
+
+    def _run_install_with_urlopen(self, paths, urlopen):
+        return run_install(
+            paths,
+            self.manifest,
+            PlainReporter(io.StringIO()),
+            urlopen=urlopen,
+        )
+
+    def test_prior_managed_homing_values_migrate_for_all_variants(self):
         for firmware, source_variant, _ in SOURCE_CASES:
             with self.subTest(firmware=firmware, source_variant=source_variant):
                 printer_root, paths, stock_source = self._fixture(
@@ -249,9 +492,9 @@ class SourcePatchLifecycleMatrixTests(unittest.TestCase):
                 )
                 cfg = printer_root / "config/printer.cfg"
                 cfg.write_text(
-                    cfg.read_text(encoding="utf-8").replace(
-                        "homing_speed: 50", "homing_speed: 65"
-                    ),
+                    cfg.read_text(encoding="utf-8")
+                    .replace("homing_speed: 50", "homing_speed: 100")
+                    .replace("homing_retract_speed: 200.0", "homing_retract_speed: 1000.0"),
                     encoding="utf-8",
                 )
                 write_installed_state(
@@ -259,9 +502,9 @@ class SourcePatchLifecycleMatrixTests(unittest.TestCase):
                     InstalledState(
                         schema_version=1,
                         package_id="qidi-max4-optimized",
-                        package_version="26.06.15.1",
+                        package_version=self.manifest.package.version,
                         runtime_firmware=firmware,
-                        backup_label="legacy-26.06.15.1",
+                        backup_label="prior-install",
                         installed_at="2026-06-15T00:00:00Z",
                         managed_tree=ManagedTreeState(
                             "config/tltg-optimized-macros", ()
@@ -273,7 +516,7 @@ class SourcePatchLifecycleMatrixTests(unittest.TestCase):
                                 "stepper_x",
                                 "homing_speed",
                                 "50",
-                                "65",
+                                "100",
                                 "applied",
                             ),
                             PatchLedgerEntry(
@@ -282,7 +525,25 @@ class SourcePatchLifecycleMatrixTests(unittest.TestCase):
                                 "stepper_y",
                                 "homing_speed",
                                 "50",
-                                "65",
+                                "100",
+                                "applied",
+                            ),
+                            PatchLedgerEntry(
+                                "stepper_x_homing_retract_speed",
+                                "config/printer.cfg",
+                                "stepper_x",
+                                "homing_retract_speed",
+                                "200.0",
+                                "1000.0",
+                                "applied",
+                            ),
+                            PatchLedgerEntry(
+                                "stepper_y_homing_retract_speed",
+                                "config/printer.cfg",
+                                "stepper_y",
+                                "homing_retract_speed",
+                                "200.0",
+                                "1000.0",
                                 "applied",
                             ),
                         ),
@@ -291,7 +552,8 @@ class SourcePatchLifecycleMatrixTests(unittest.TestCase):
 
                 self._run_install(paths)
 
-                self._assert_homing_speed(printer_root, "100")
+                self._assert_homing_speed(printer_root, "65")
+                self._assert_homing_retract_speed(printer_root, "500.0")
                 state = load_installed_state(
                     printer_root / "config/tltg_optimized_state.yaml"
                 )
@@ -302,10 +564,10 @@ class SourcePatchLifecycleMatrixTests(unittest.TestCase):
                     in {"stepper_x_homing_speed", "stepper_y_homing_speed"}
                 }
                 self.assertEqual({entry.expected for entry in speeds.values()}, {"50"})
-                self.assertEqual({entry.desired for entry in speeds.values()}, {"100"})
+                self.assertEqual({entry.desired for entry in speeds.values()}, {"65"})
                 self.assertEqual(state.source_patches[0].original_bytes, stock_source)
 
-    def test_auto_update_child_source_activation_advances_checksum_for_all_variants(self):
+    def test_auto_update_child_initializes_defaults_and_advances_checksum_for_all_variants(self):
         for firmware, source_variant, desired_sha256 in SOURCE_CASES:
             with self.subTest(firmware=firmware, source_variant=source_variant):
                 printer_root, _, _ = self._fixture(
@@ -327,8 +589,9 @@ class SourcePatchLifecycleMatrixTests(unittest.TestCase):
                     json.dumps({"latest_checksum": "0" * 64}), encoding="utf-8"
                 )
                 enrollment_path(paths).write_text("1\n", encoding="utf-8")
-                pids = iter((100, 101))
+                process = {"id": 100}
                 child_calls = []
+                fallback_urlopen = self._fixture_urlopen(printer_root)
 
                 def urlopen(request, timeout=0):
                     url = getattr(request, "full_url", str(request))
@@ -338,19 +601,12 @@ class SourcePatchLifecycleMatrixTests(unittest.TestCase):
                         return _BytesResponse(archive)
                     if url.endswith("/printer/info"):
                         return _JsonResponse(
-                            {"result": {"state": "ready", "process_id": next(pids)}}
+                            {"result": {"state": "ready", "process_id": process["id"]}}
                         )
                     if url.endswith("/machine/services/restart"):
+                        process["id"] += 1
                         return _JsonResponse({"result": "ok"})
-                    if "printer/objects/query" in url:
-                        return _JsonResponse(
-                            {
-                                "result": {
-                                    "status": {"print_stats": {"state": "standby"}}
-                                }
-                            }
-                        )
-                    self.fail(f"Unexpected URL: {url}")
+                    return fallback_urlopen(request, timeout=timeout)
 
                 def child_run(command, **kwargs):
                     child_calls.append((command, kwargs))
@@ -384,6 +640,17 @@ class SourcePatchLifecycleMatrixTests(unittest.TestCase):
 
                 self.assertEqual(result.action, "updated")
                 self.assertEqual(len(child_calls), 1)
+                saved_variables = (printer_root / "config/saved_variables.cfg").read_text(
+                    encoding="utf-8"
+                )
+                self.assertEqual(
+                    klipper_cfg.resolve_unique_option(
+                        saved_variables,
+                        "Variables",
+                        "tltg_keep_loaded_between_prints",
+                    ).value,
+                    "1",
+                )
                 self.assertEqual(
                     json.loads(state_path(paths).read_text(encoding="utf-8"))["latest_checksum"],
                     checksum,
@@ -430,6 +697,103 @@ class SourcePatchLifecycleMatrixTests(unittest.TestCase):
                     run=failed_sudo,
                 )
         self.assertFalse(enrollment_path(paths).exists())
+
+    def test_unenrolled_current_checksum_does_not_repair_saved_variables(self):
+        printer_root, paths, _ = self._fixture("01.01.06.03")
+        checksum = "a" * 64
+        before = (printer_root / "config/saved_variables.cfg").read_bytes()
+        state_path(paths).write_text(json.dumps({"latest_checksum": checksum}), encoding="utf-8")
+        base_urlopen = self._fixture_urlopen(printer_root)
+        gcode_scripts = []
+
+        def urlopen(request, timeout=0):
+            if getattr(request, "full_url", str(request)).endswith(".sha256"):
+                return _BytesResponse(f"{checksum} bundle\n".encode())
+            if "/printer/gcode/script" in getattr(request, "full_url", str(request)):
+                gcode_scripts.append(request.data)
+            return base_urlopen(request, timeout=timeout)
+
+        result = run_auto_update_check(
+            paths=paths,
+            reporter=PlainReporter(io.StringIO()),
+            environ={"TLTG_AUTO_UPDATE_CHECKSUM_URL": "https://example.invalid/latest.sha256"},
+            urlopen=urlopen,
+        )
+        self.assertEqual(result.action, "initialized")
+        self.assertEqual(gcode_scripts, [])
+        self.assertEqual((printer_root / "config/saved_variables.cfg").read_bytes(), before)
+
+        printer_root, paths, _ = self._fixture("01.01.06.03")
+        self._run_install(paths)
+        saved_variables_path = printer_root / "config/saved_variables.cfg"
+        saved_variables_path.write_text(
+            saved_variables_path.read_text(encoding="utf-8").replace(
+                "tltg_keep_loaded_between_prints = 1\n", ""
+            ),
+            encoding="utf-8",
+        )
+        checksum = "a" * 64
+        enrollment_path(paths).write_text("1\n", encoding="utf-8")
+        state_path(paths).write_text(json.dumps({"latest_checksum": checksum}), encoding="utf-8")
+        base_urlopen = self._fixture_urlopen(printer_root)
+
+        def urlopen(request, timeout=0):
+            if getattr(request, "full_url", str(request)).endswith(".sha256"):
+                return _BytesResponse(f"{checksum} bundle\n".encode())
+            return base_urlopen(request, timeout=timeout)
+
+        result = run_auto_update_check(
+            paths=paths,
+            reporter=PlainReporter(io.StringIO()),
+            environ={"TLTG_AUTO_UPDATE_CHECKSUM_URL": "https://example.invalid/latest.sha256"},
+            urlopen=urlopen,
+        )
+        self.assertEqual(result.action, "already-current")
+        self.assertEqual(
+            klipper_cfg.resolve_unique_option(
+                saved_variables_path.read_text(encoding="utf-8"),
+                "Variables",
+                "tltg_keep_loaded_between_prints",
+            ).value,
+            "1",
+        )
+
+    def test_unattended_saved_variable_repair_skips_active_and_unavailable_printers(self):
+        printer_root, paths, _ = self._fixture("01.01.06.03")
+        self._run_install(paths)
+        before = (printer_root / "config/saved_variables.cfg").read_bytes()
+        checksum = "a" * 64
+        enrollment_path(paths).write_text("1\n", encoding="utf-8")
+        state_path(paths).write_text(json.dumps({"latest_checksum": checksum}), encoding="utf-8")
+
+        active_base_urlopen = self._fixture_urlopen(printer_root, state="printing")
+
+        def active_urlopen(request, timeout=0):
+            if getattr(request, "full_url", str(request)).endswith(".sha256"):
+                return _BytesResponse(f"{checksum} bundle\n".encode())
+            return active_base_urlopen(request, timeout=timeout)
+
+        def unavailable_urlopen(request, timeout=0):
+            url = getattr(request, "full_url", str(request))
+            if url.endswith(".sha256"):
+                return _BytesResponse(f"{checksum} bundle\n".encode())
+            return _JsonResponse({"result": {}})
+
+        for urlopen, expected_action in (
+            (active_urlopen, "skipped-active-print"),
+            (unavailable_urlopen, "skipped-unknown-printer-state"),
+        ):
+            result = run_auto_update_check(
+                paths=paths,
+                reporter=PlainReporter(io.StringIO()),
+                environ={
+                    "TLTG_AUTO_UPDATE_CHECKSUM_URL": "https://example.invalid/latest.sha256",
+                    "TLTG_AUTO_UPDATE_ARCHIVE_URL": "https://example.invalid/latest.tar.gz",
+                },
+                urlopen=urlopen,
+            )
+            self.assertEqual(result.action, expected_action)
+        self.assertEqual((printer_root / "config/saved_variables.cfg").read_bytes(), before)
 
     def test_unenrolled_changed_checksum_records_latest_without_installing(self):
         printer_root, paths, _ = self._fixture("01.01.06.03")
@@ -525,7 +889,8 @@ class SourcePatchLifecycleMatrixTests(unittest.TestCase):
 
         archive = _release_archive()
         checksum = hashlib.sha256(archive).hexdigest()
-        pids = iter((100, 101))
+        process = {"id": 100}
+        fallback_urlopen = self._fixture_urlopen(printer_root)
 
         def urlopen(request, timeout=0):
             url = getattr(request, "full_url", str(request))
@@ -535,15 +900,12 @@ class SourcePatchLifecycleMatrixTests(unittest.TestCase):
                 return _BytesResponse(archive)
             if url.endswith("/printer/info"):
                 return _JsonResponse(
-                    {"result": {"state": "ready", "process_id": next(pids)}}
+                    {"result": {"state": "ready", "process_id": process["id"]}}
                 )
             if url.endswith("/machine/services/restart"):
+                process["id"] += 1
                 return _JsonResponse({"result": "ok"})
-            if "printer/objects/query" in url:
-                return _JsonResponse(
-                    {"result": {"status": {"print_stats": {"state": "standby"}}}}
-                )
-            self.fail(f"Unexpected URL: {url}")
+            return fallback_urlopen(request, timeout=timeout)
 
         def child_run(command, **kwargs):
             child_paths = resolve_runtime_paths(
@@ -705,6 +1067,60 @@ class SourcePatchLifecycleMatrixTests(unittest.TestCase):
                 self.assertFalse(
                     (printer_root / "config/tltg_optimized_state.yaml").exists()
                 )
+
+    def test_restore_rejects_non_idle_printer_after_confirmation_without_replacement(self):
+        printer_root, paths, _ = self._fixture("01.01.06.03")
+        install = self._run_install(paths)
+        assert install.backup_zip_path is not None
+        printer_config = printer_root / "config/printer.cfg"
+        printer_config.write_text("[printer]\nmodified: yes\n", encoding="utf-8")
+        before = printer_config.read_bytes()
+
+        for state in ("printing", "paused", None):
+            with self.subTest(state=state):
+                with self.assertRaises((ActivePrintError, PrinterStateError)):
+                    run_restore_helper(
+                        paths,
+                        self.manifest,
+                        stream=io.StringIO(),
+                        input_stream=io.StringIO("RESTORE\n"),
+                        backup_path=str(install.backup_zip_path),
+                        urlopen=moonraker_urlopen(state),
+                    )
+                self.assertEqual(printer_config.read_bytes(), before)
+
+    def test_interrupt_after_configuration_write_rolls_back_and_preserves_live_saved_variables(self):
+        printer_root, paths, _ = self._fixture("01.01.06.03")
+        saved_variables_path = printer_root / "config/saved_variables.cfg"
+        saved_before = saved_variables_path.read_bytes()
+        printer_before = (printer_root / "config/printer.cfg").read_bytes()
+
+        with mock.patch(
+            "installer.runtime.runner.mirror_tree", side_effect=KeyboardInterrupt
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                self._run_install(paths)
+
+        self.assertEqual((printer_root / "config/printer.cfg").read_bytes(), printer_before)
+        self.assertNotEqual(saved_variables_path.read_bytes(), saved_before)
+        self.assertIn(
+            b"tltg_keep_loaded_between_prints = 1", saved_variables_path.read_bytes()
+        )
+        self.assertFalse(paths.restart_marker_path.exists())
+        self.assertFalse((printer_root / "config/tltg_optimized_state.yaml").exists())
+
+    def test_interrupt_after_configuration_commit_preserves_committed_state(self):
+        printer_root, paths, _ = self._fixture("01.01.06.03")
+        with mock.patch(
+            "installer.runtime.runner.maybe_apply_system_optimizations",
+            side_effect=KeyboardInterrupt,
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                self._run_install(paths)
+
+        self.assertTrue((printer_root / "config/tltg_optimized_state.yaml").exists())
+        self._assert_homing_speed(printer_root, "65")
+        self.assertTrue(paths.restart_marker_path.exists())
 
     def test_source_inclusive_restore_restores_stock_source_for_all_variants(self):
         for firmware, source_variant, _ in SOURCE_CASES:
@@ -929,6 +1345,17 @@ class SourcePatchLifecycleMatrixTests(unittest.TestCase):
                 )
                 self.assertFalse(
                     (printer_root / "config/tltg_optimized_state.yaml").exists()
+                )
+                saved_variables = (
+                    printer_root / "config/saved_variables.cfg"
+                ).read_text(encoding="utf-8")
+                self.assertEqual(
+                    klipper_cfg.resolve_unique_option(
+                        saved_variables,
+                        "Variables",
+                        "tltg_keep_loaded_between_prints",
+                    ).value,
+                    "1",
                 )
 
 

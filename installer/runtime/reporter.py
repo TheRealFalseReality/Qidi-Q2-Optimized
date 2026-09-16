@@ -171,31 +171,13 @@ class PlainReporter:
         self, *, patch_results: tuple[PatchResult, ...], managed_tree_drift: tuple[DriftRecord, ...]
     ) -> None:
         self.line(messages.INSTALLED)
-        self._emit_groups(user_modified_patch_groups(patch_results))
-        if managed_tree_drift:
-            self._emit_groups(
-                (
-                    DetailGroup(
-                        messages.MANAGED_TREE_DRIFT_OVERWRITTEN,
-                        managed_tree_drift_rows(managed_tree_drift),
-                    ),
-                )
-            )
+        self._emit_groups(operation_success_groups(patch_results, managed_tree_drift, installed=True))
 
     def emit_uninstall_success(
         self, *, patch_results: tuple[PatchResult, ...], managed_tree_drift: tuple[DriftRecord, ...]
     ) -> None:
         self.line(messages.UNINSTALLED)
-        self._emit_groups(user_modified_patch_groups(patch_results))
-        if managed_tree_drift:
-            self._emit_groups(
-                (
-                    DetailGroup(
-                        messages.MANAGED_TREE_DRIFT,
-                        managed_tree_drift_rows(managed_tree_drift),
-                    ),
-                )
-            )
+        self._emit_groups(operation_success_groups(patch_results, managed_tree_drift, installed=False))
 
     def emit_install_dry_run(self, *, plan: InstallPlan) -> None:
         self.line("Dry-run summary:")
@@ -328,16 +310,7 @@ class RichReporter:
             border_style="green",
             style="bold green",
         )
-        self._print_groups(user_modified_patch_groups(patch_results))
-        if managed_tree_drift:
-            self._print_groups(
-                (
-                    DetailGroup(
-                        messages.MANAGED_TREE_DRIFT_OVERWRITTEN,
-                        managed_tree_drift_rows(managed_tree_drift),
-                    ),
-                )
-            )
+        self._print_groups(operation_success_groups(patch_results, managed_tree_drift, installed=True))
 
     def emit_uninstall_success(
         self, *, patch_results: tuple[PatchResult, ...], managed_tree_drift: tuple[DriftRecord, ...]
@@ -348,16 +321,7 @@ class RichReporter:
             border_style="green",
             style="bold green",
         )
-        self._print_groups(user_modified_patch_groups(patch_results))
-        if managed_tree_drift:
-            self._print_groups(
-                (
-                    DetailGroup(
-                        messages.MANAGED_TREE_DRIFT,
-                        managed_tree_drift_rows(managed_tree_drift),
-                    ),
-                )
-            )
+        self._print_groups(operation_success_groups(patch_results, managed_tree_drift, installed=False))
 
     def emit_install_dry_run(self, *, plan: InstallPlan) -> None:
         self._print_message_panel(
@@ -771,6 +735,23 @@ def preflight_report_groups(report: PreflightReport) -> tuple[DetailGroup, ...]:
         )
     return tuple(groups)
 
+
+
+def operation_success_groups(
+    patch_results: tuple[PatchResult, ...],
+    managed_tree_drift: tuple[DriftRecord, ...],
+    *,
+    installed: bool,
+) -> tuple[DetailGroup, ...]:
+    groups = list(user_modified_patch_groups(patch_results))
+    if managed_tree_drift:
+        groups.append(
+            DetailGroup(
+                messages.MANAGED_TREE_DRIFT_OVERWRITTEN if installed else messages.MANAGED_TREE_DRIFT,
+                managed_tree_drift_rows(managed_tree_drift),
+            )
+        )
+    return tuple(groups)
 
 
 def user_modified_patch_groups(patch_results: tuple[PatchResult, ...]) -> tuple[DetailGroup, ...]:

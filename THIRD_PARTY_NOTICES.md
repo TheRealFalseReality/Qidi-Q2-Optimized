@@ -25,6 +25,14 @@ The installer payloads are modified QIDI/Klipper homing sources. `homing.py` was
 - License: GPL-3.0-only
 - Path: `config/fluidd.cfg`
 
+### QIDI Moonraker metadata storage
+
+- Upstream: <https://github.com/Arksine/moonraker>
+- License: GPL-3.0-only
+- Path: `installer/tests/fixtures/moonraker_metadata_storage.py`
+
+The fixture contains the unmodified `MetadataStorage` class and metascan handler extracted from QIDI Max 4 Moonraker source captured on 2026-09-15. The enclosing module credits Copyright (C) 2020 Eric Callahan and distribution under GNU GPLv3. The fixture retains that attribution without the contact address; imports and service dependencies are supplied by the test harness.
+
 ### Moonraker Timelapse
 
 - Source: <https://github.com/mainsail-crew/moonraker-timelapse>

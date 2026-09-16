@@ -57,6 +57,14 @@ Include changed generated `.md` and `.mmd` files. If a concrete command change l
 - Cooling: `installer/klipper/tltg-optimized-macros/cooling.cfg`; pause/resume/cancel: `config/klipper-macros-qd/pause_resume_cancel.cfg`.
 - `config/KAMP/*.cfg` exists but is not the active adaptive-mesh path.
 
+## Package versions and changelog
+
+- Changes to installed macros, installer behavior, or release-bundle contents must advance the package version.
+- Run `python3 scripts/bump_installer_version.py <version>` so `installer/package.yaml` and `installer/klipper/tltg-optimized-macros/globals.cfg` stay aligned; it appends the release identifier to `package.known_versions` without rewriting `installer/supported_upgrade_sources.yaml`.
+- Update `installer/supported_upgrade_sources.yaml` explicitly in the same release only when a new guarded patch target or source-patch provenance is introduced; the cumulative envelope must cover the current manifest.
+- Every new package version must have a matching `CHANGELOG.md` section in the same change. Include every operator-visible change shipped under that version, including changes merged since the previous changelog version.
+- Before finalizing, compare recent versions in `installer/package.yaml` with `CHANGELOG.md` headings and run `python3 scripts/check_installer_known_versions.py`; missing or inconsistent release notes block completion.
+
 ## Validation
 
 - Optimized macro `.cfg`: `python3 scripts/format_klipper_configs.py`

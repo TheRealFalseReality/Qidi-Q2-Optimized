@@ -6,7 +6,7 @@ package:
   id: qidi-max4-optimized
   display_name: QIDI Max 4 Optimized
   printer_model: qidi-max4
-  version: "26.08.06.3"
+  version: "26.09.15.2"
   known_versions:
     - "26.04.21.1"
     - "26.04.27.1"
@@ -48,6 +48,12 @@ package:
     - "26.08.06.1"
     - "26.08.06.2"
     - "26.08.06.3"
+    - "26.08.09.1"
+    - "26.08.09.2"
+    - "26.08.29.1"
+    - "26.09.09.1"
+    - "26.09.15.1"
+    - "26.09.15.2"
 
 firmware:
   supported:
@@ -106,6 +112,7 @@ install:
       - "offset.cfg"
       - "pa_calibration.cfg"
       - "start_end.cfg"
+      - "temperatures.cfg"
 
   external_files:
     - id: tltg_pa_calibration_extra
@@ -148,10 +155,10 @@ patches:
       variants:
         - firmwares: ["01.01.06.03"]
           expected: "50"
-          desired: "100"
+          desired: "65"
         - firmwares: ["01.01.06.04", "01.01.06.05"]
           expected: "50"
-          desired: "100"
+          desired: "65"
 
     - id: stepper_x_second_homing_speed
       file: "config/printer.cfg"
@@ -184,10 +191,10 @@ patches:
       variants:
         - firmwares: ["01.01.06.03"]
           expected: "200.0"
-          desired: "1000.0"
+          desired: "500.0"
         - firmwares: ["01.01.06.04", "01.01.06.05"]
           expected: "200.0"
-          desired: "1000.0"
+          desired: "500.0"
 
     - id: stepper_y_homing_speed
       file: "config/printer.cfg"
@@ -196,10 +203,10 @@ patches:
       variants:
         - firmwares: ["01.01.06.03"]
           expected: "50"
-          desired: "100"
+          desired: "65"
         - firmwares: ["01.01.06.04", "01.01.06.05"]
           expected: "50"
-          desired: "100"
+          desired: "65"
 
     - id: stepper_y_second_homing_speed
       file: "config/printer.cfg"
@@ -232,10 +239,10 @@ patches:
       variants:
         - firmwares: ["01.01.06.03"]
           expected: "200.0"
-          desired: "1000.0"
+          desired: "500.0"
         - firmwares: ["01.01.06.04", "01.01.06.05"]
           expected: "200.0"
-          desired: "1000.0"
+          desired: "500.0"
 
     - id: stepper_z_homing_retract_dist
       file: "config/printer.cfg"
@@ -482,6 +489,9 @@ system_optimizations:
     sha256: 616c11226addbc09c9d4dc83b0e1d359f15e2f4c1d84c1d8bb008f841d616fce
     destination: /home/qidi/QIDI_Client/access
     restart_service: qidi-client.service
+  moonraker_file_manager:
+    file: /home/qidi/moonraker/moonraker/components/file_manager/file_manager.py
+    restart_service: moonraker.service
   moonraker_metadata_3mf:
     file: /home/qidi/moonraker/moonraker/components/file_manager/metadata.py
     restart_service: moonraker.service

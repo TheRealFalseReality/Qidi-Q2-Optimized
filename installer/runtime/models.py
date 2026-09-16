@@ -251,6 +251,7 @@ class SystemOptimizationsSpec:
     services: SystemServicesSpec
     qidiclient_static_gifs: SystemQidiClientStaticGifsSpec
     moonraker_metadata_3mf: SystemMoonrakerMetadata3mfSpec
+    moonraker_file_manager: SystemMoonrakerMetadata3mfSpec
     rockchip_root_sync: SystemRockchipRootSyncSpec
 
 
@@ -310,17 +311,11 @@ class UpgradeSourceExternalFile:
 
 
 @dataclass(frozen=True)
-class UpgradeSource:
-    version: str
+class UpgradeSources:
+    schema_version: int
     allowed_patch_targets: tuple[AllowedPatchTarget, ...]
     source_patches: tuple[UpgradeSourcePatch, ...] = ()
     external_files: tuple[UpgradeSourceExternalFile, ...] = ()
-
-
-@dataclass(frozen=True)
-class UpgradeSources:
-    schema_version: int
-    versions: dict[str, UpgradeSource]
 
 
 @dataclass(frozen=True)
@@ -440,6 +435,13 @@ class DriftRecord:
 
 
 @dataclass(frozen=True)
+class FileChange:
+    path: Path
+    preimage: bytes | None
+    desired: bytes | None
+
+
+@dataclass(frozen=True)
 class ManagedTreeIntent:
     id: str
     source: Optional[str]
@@ -473,6 +475,7 @@ class StateFileIntent:
 @dataclass(frozen=True)
 class InstallPlan:
     backup_label: str
+    file_changes: tuple[FileChange, ...]
     managed_tree_intent: ManagedTreeIntent
     include_line_intents: tuple[IncludeLineIntent, ...]
     external_file_intents: tuple[ExternalFileIntent, ...]
@@ -485,6 +488,7 @@ class InstallPlan:
 @dataclass(frozen=True)
 class UninstallPlan:
     backup_label: str
+    file_changes: tuple[FileChange, ...]
     managed_tree_intent: ManagedTreeIntent
     include_line_intents: tuple[IncludeLineIntent, ...]
     external_file_intents: tuple[ExternalFileIntent, ...]

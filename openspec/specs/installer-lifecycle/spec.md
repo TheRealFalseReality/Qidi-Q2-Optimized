@@ -48,7 +48,9 @@ Install, reinstall, restore, and uninstall SHALL execute as serialized, idle-pri
 
 #### Scenario: Restore reconstructs the archived runtime
 - **WHEN** restore receives explicit confirmation for a validated installer archive
-- **THEN** archived configuration and eligible external members are staged before replacing live runtime state
+- **THEN** it validates printer idleness after confirmation and before replacing live runtime state, including for config-only archives
+- **AND** printing, paused, unknown, or unavailable printer state prevents live replacement
+- **AND** archived configuration and eligible external members are staged before replacing live runtime state
 - **AND** partial failure restores the pre-restore state
 - **AND** every restored root is verified before success and recovery remains blocked until incomplete compensation is resolved
 
@@ -57,6 +59,15 @@ Install, reinstall, restore, and uninstall SHALL execute as serialized, idle-pri
 - **THEN** safety decisions remain equivalent to the normal flow
 - **AND** no unapproved backup, pruning, or live mutation occurs
 - **AND** interruption prevents later actions and exits without a traceback
+- **AND** interruption after an uncommitted configuration write restores recoverable preimages or records a recovery blocker if compensation cannot complete
+- **AND** interruption after configuration commit preserves the verified result and any outstanding activation or host-recovery obligation without reporting unfinished work as complete
+- **AND** compensation does not restore a whole vendor saved-variable file over live Klipper state
+
+#### Scenario: Preview and execution agree on file changes
+- **WHEN** install or uninstall evaluates the same validated files, release, and operator policy
+- **THEN** dry-run reports the same proposed file changes and preserved drift as execution
+- **AND** execution rejects changed preimages before overwriting them rather than silently applying a stale decision
+- **AND** live runtime interactions retain their own readiness, idleness, and authorization checks
 
 ### Requirement: Managed Klipper source activation
 The installer SHALL deploy firmware-scoped Klipper source only from validated provenance and consider a source change active only after a replacement Klipper process is verified ready.
@@ -78,7 +89,7 @@ The installer SHALL deploy firmware-scoped Klipper source only from validated pr
 - **THEN** its ID and destination are unique across source patches and external files
 - **AND** its bundle source is a non-symlink regular file under `installer/klipper/` whose SHA-256 matches the manifest
 - **AND** its destination is a relative non-traversing path under `klippy/extras/`
-- **AND** prior installed hashes are accepted only when enumerated for the ledger's package version
+- **AND** the ledger's package identity and version must be admitted, and prior installed hashes are accepted only when enumerated for the same ID and destination in the cumulative compatibility envelope
 - **AND** unknown, escaped, symlinked, tampered, or unowned live content fails before mutation
 
 #### Scenario: External-file deployment is transactional
@@ -91,7 +102,7 @@ The installer SHALL deploy firmware-scoped Klipper source only from validated pr
 - **WHEN** uninstall or archive restore processes a managed external Python file
 - **THEN** install and uninstall backups capture each state-owned external Python payload with its destination, hash, and mode
 - **AND** uninstall removes only content matching the installed hash or restores its validated preimage
-- **AND** archive restore reconstructs declared presence only from archived bytes matching the version-proven installed hash
+- **AND** archive restore reconstructs declared presence only from archived bytes matching the provenance-validated installed hash
 - **AND** archived state that omits the external file requires the managed payload to be absent
 - **AND** unknown live drift is preserved and blocks mutation
 
@@ -103,6 +114,8 @@ The installer SHALL deploy firmware-scoped Klipper source only from validated pr
 - **AND** active, unknown, failed, or drifted activation remains pending and blocks unsafe continuation
 - **AND** the pending marker binds each source patch and external Python destination to its intended live hash or expected absence
 - **AND** every installer entrypoint resolves pending activation before further release work
+- **AND** a post-activation saved-variable mismatch retains its exact authorized expectations and blocks later install or automatic-update work until an exact live Moonraker verification succeeds; dry-run verification preserves the marker, and terminal uninstall removes it only after successful postflight while rollback preserves it
+
 
 ### Requirement: Non-owning QIDI Box reconciliation
 The installer SHALL keep an available QIDI Box usable without claiming ownership of vendor saved variables or silently replacing existing non-empty tool mappings.
@@ -116,11 +129,26 @@ The installer SHALL keep an available QIDI Box usable without claiming ownership
 #### Scenario: Automatic reconciliation preserves vendor state
 - **WHEN** noninteractive install or update observes Box topology while the printer is idle
 - **THEN** missing active mappings are created and existing non-empty mappings are preserved
-- **AND** busy or unknown printer state causes no reconciliation writes
+- **AND** busy, unavailable, or not-ready Klipper state causes no reconciliation writes
+- **AND** every write uses Klipper's live `SAVE_VARIABLE` command through Moonraker, verifies its live value and, when a source-patch restart occurs, verifies it again after the replacement process; it never restores a whole saved-variable file during rollback
 - **AND** saved-variable changes are excluded from installer ownership and uninstall
 
+### Requirement: Default optimized preferences preserve operator values
+The installer SHALL initialize absent optimized saved-variable preferences to release defaults without replacing operator-controlled values.
+
+#### Scenario: Absent retention preference receives the installed default
+- **WHEN** install or update finds no `tltg_keep_loaded_between_prints` entry in Klipper saved variables
+- **THEN** it saves `1` through Moonraker only after Klipper is ready, verifies the live value and, when a source-patch restart occurs, verifies it again after the replacement process; existing `0` is preserved as an operator choice
+- **AND** install and upgrade repair missing defaults while idle; already-current automatic-update checks perform this repair only on enrolled printers
+- **AND** the preference remains outside the installed-state ownership ledger
+
+#### Scenario: Existing retention preference is preserved
+- **WHEN** install or update finds an existing `tltg_keep_loaded_between_prints` value, including `0`
+- **THEN** it leaves that value unchanged
+- **AND** uninstall does not remove or reset it
+
 ### Requirement: Opt-in recoverable host optimization
-The installer SHALL apply host OS optimizations only under explicit persisted policy, preserve recoverable preimages, and keep host-operation failures separate from a verified printer-configuration result.
+The installer SHALL apply host OS optimizations only under explicit persisted policy, preserve recoverable preimages, and keep host-operation failures separate from a verified printer-configuration result. System optimizations SHALL remain available through the same packaged install, update, and uninstall flow without requiring a separate package or operator command.
 
 #### Scenario: Enabled policy reconciles only recognized host state
 - **WHEN** system optimizations are enabled
@@ -128,16 +156,20 @@ The installer SHALL apply host OS optimizations only under explicit persisted po
 - **AND** installer-owned drift is reconciled without replacing first restore preimages
 - **AND** unowned, unknown, or user-modified state is preserved and reported
 - **AND** operation failure rolls back journaled host work without deleting a verified configuration install
-
-#### Scenario: Multi-plate 3MF metadata follows the selected plate
-- **WHEN** enabled Moonraker optimization reads a `.gcode.3mf` archive
-- **THEN** G-code, metadata, and thumbnail selection use its valid selected plate index
-- **AND** missing or invalid plate metadata falls back to plate 1
+- **AND** incomplete host compensation retains a recovery blocker and does not report the overall operation as complete
 
 #### Scenario: Uninstall follows the operator's host-state decision
 - **WHEN** uninstall finds host restore preimages
 - **THEN** accepted restoration reverts only unchanged installer-owned targets
+- **AND** targets already at their retained preimages are left unchanged
+- **AND** user-modified files, symlinks, assets, or service states are preserved and reported
 - **AND** declined restoration or explicit keep policy leaves current host state unchanged
+
+#### Scenario: Reconciliation retains bounded recovery state
+- **WHEN** repeated checks find host optimizations already current
+- **THEN** installer recovery-state size and restoration-backup count do not grow with the number of checks
+- **AND** first restoration preimages and unresolved transaction or reboot evidence remain available
+- **AND** previously installed host ledgers remain recoverable when their historical action records are compacted
 
 #### Scenario: Host reboot is deferred until safe
 - **WHEN** an applied operation requires a host reboot
@@ -145,6 +177,41 @@ The installer SHALL apply host OS optimizations only under explicit persisted po
 - **AND** reboot is scheduled only after successful transaction completion, explicit authorization, and a fresh idle-printer check
 - **AND** later execution clears the requirement only after post-boot verification succeeds
 - **AND** dry-run, active, or unknown printer state performs no reboot
+
+### Requirement: Recoverable Moonraker metadata optimization
+Normal install and update SHALL apply recognized Moonraker metadata optimizations independently of optional OS optimization policy, retain original source preimages, and preserve unrecognized or operator-modified source.
+
+#### Scenario: Multi-plate 3MF metadata follows the selected plate
+- **WHEN** the optimized metadata extractor reads a `.gcode.3mf` archive
+- **THEN** G-code, metadata, and thumbnail selection use its valid selected plate index
+- **AND** missing or invalid plate metadata falls back to plate 1
+
+#### Scenario: Unchanged archives reuse persistent metadata
+- **WHEN** startup observation or upload handling encounters a 3MF with cached metadata matching its size, modification time, extractor stamp, and object-processing policy
+- **THEN** extraction is skipped without changing cached thumbnails or last-printed fields
+- **AND** new, changed, unstamped, or invalidated archives remain eligible for extraction
+- **AND** an unavailable extractor never validates a cached archive
+
+#### Scenario: Mixed metadata requests complete without a stuck queue
+- **WHEN** G-code and 3MF requests share a pending metadata queue
+- **THEN** both entrypoints use the same cache-aware worker
+- **AND** a request that becomes valid while queued is removed and its waiter released
+- **AND** exhausting extraction retries is not treated as a successful metadata refresh and does not prevent later requests from completing
+
+#### Scenario: Manual 3MF rescans use archive-aware extraction
+- **WHEN** an operator requests a metadata rescan for a 3MF within the G-code root
+- **THEN** the archive is explicitly re-extracted through the shared metadata queue, or the request joins extraction already pending for that archive
+- **AND** existing QIDI thumbnail files are not deleted
+- **AND** extraction failure returns an error and preserves prior metadata
+- **AND** escaped, reserved, and missing archive paths are rejected before extraction
+- **AND** ordinary G-code rescan behavior remains unchanged
+
+#### Scenario: File-manager deployment remains reversible
+- **WHEN** recognized file-manager source requires the cache patch
+- **THEN** the installer validates the reviewed metadata class and metascan handler before backup, preserves unrelated source and line endings, and replaces the file atomically
+- **AND** source changes require a successful Moonraker restart; restart failure compensates the file change or retains a recovery blocker
+- **AND** repeated reconciliation retains the first restore preimage without accumulating backups
+- **AND** accepted uninstall restoration reverts only the unchanged installed file; concurrent changes and operator drift are preserved
 
 ### Requirement: Safe unattended updates
 Automatic updates SHALL require durable operator enrollment, use the same admission, ownership, recovery, activation, and persisted host-policy rules as direct installation, and advance release state only after successful activation.

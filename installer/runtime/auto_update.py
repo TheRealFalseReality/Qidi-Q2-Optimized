@@ -14,6 +14,11 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Callable
 
+from .box_enablement import (
+    SavedVariablePersistenceError,
+    maybe_repair_saved_variables,
+    verify_pending_saved_variable_expectations,
+)
 from . import messages, safety
 from .errors import (
     ActivePrintError,
@@ -246,6 +251,10 @@ def run_auto_update_check(
     run: RunFn = subprocess.run,
 ) -> AutoUpdateRunResult:
     env = os.environ if environ is None else environ
+    try:
+        verify_pending_saved_variable_expectations(paths, urlopen=urlopen)
+    except SavedVariablePersistenceError as exc:
+        raise AutoUpdateError("Pending saved-variable verification could not be verified.") from exc
     if paths.restart_marker_path.exists():
         try:
             manifest = load_manifest(paths.installer_root / "package.yaml")
@@ -264,8 +273,15 @@ def run_auto_update_check(
                 },
                 urlopen=urlopen,
             )
+            verify_pending_saved_variable_expectations(paths, urlopen=urlopen)
             reporter.line("Klipper service process restarted and verified.")
-        except (ActivePrintError, PrinterStateError, ProcessRestartError, ManifestValidationError) as exc:
+        except (
+            ActivePrintError,
+            PrinterStateError,
+            ProcessRestartError,
+            ManifestValidationError,
+            SavedVariablePersistenceError,
+        ) as exc:
             raise AutoUpdateError("Pending Klipper process activation could not be verified.") from exc
     try:
         checksum = fetch_latest_checksum(_checksum_url(env), urlopen=urlopen)
@@ -274,10 +290,20 @@ def run_auto_update_check(
         return AutoUpdateRunResult(action="skipped-checksum-unavailable")
     state = _read_state(paths)
     stored_checksum = state.get("latest_checksum")
+    enrolled = auto_update_enrolled(paths)
     reconciliation_required = False
-    if stored_checksum == checksum and auto_update_enrolled(paths):
+    if stored_checksum == checksum and enrolled:
         reconciliation_required = _installation_requires_reconciliation(paths)
-    if stored_checksum == checksum and not reconciliation_required:
+    if stored_checksum == checksum and enrolled and not reconciliation_required:
+        try:
+            safety.ensure_printer_idle(paths.moonraker_url, urlopen=urlopen)
+            maybe_repair_saved_variables(paths=paths, reporter=reporter, urlopen=urlopen)
+        except ActivePrintError:
+            reporter.line(messages.AUTO_UPDATE_SKIPPED_ACTIVE_PRINT)
+            return AutoUpdateRunResult(action="skipped-active-print", checksum=checksum)
+        except (PrinterStateError, SavedVariablePersistenceError):
+            reporter.line(messages.AUTO_UPDATE_SKIPPED_UNKNOWN_STATE)
+            return AutoUpdateRunResult(action="skipped-unknown-printer-state", checksum=checksum)
         reporter.line(messages.AUTO_UPDATE_ALREADY_CURRENT)
         return AutoUpdateRunResult(action="already-current", checksum=checksum)
 
@@ -290,7 +316,7 @@ def run_auto_update_check(
         reporter.line(messages.AUTO_UPDATE_SKIPPED_UNKNOWN_STATE)
         return AutoUpdateRunResult(action="skipped-unknown-printer-state", checksum=checksum)
 
-    if not auto_update_enrolled(paths):
+    if not enrolled:
         _write_state(paths, checksum)
         reporter.line(messages.AUTO_UPDATE_INITIALIZED)
         return AutoUpdateRunResult(action="initialized", checksum=checksum)

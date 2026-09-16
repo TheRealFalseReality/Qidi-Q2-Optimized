@@ -5,11 +5,10 @@ from typing import Any
 
 import yaml
 
-from .manifest import validate_relative_path
+from .manifest import ManifestValidationError, validate_relative_path
 from .models import (
     AllowedPatchTarget,
     Manifest,
-    UpgradeSource,
     UpgradeSourceExternalFile,
     UpgradeSourcePatch,
     UpgradeSources,
@@ -40,193 +39,188 @@ def parse_supported_upgrade_sources(raw: Any) -> UpgradeSources:
         raise CompatibilityValidationError(
             "Supported upgrade sources root must be a mapping."
         )
-    schema_version = raw.get("schema_version")
-    if schema_version != 1:
+    if raw.get("schema_version") != 2:
         raise CompatibilityValidationError(
-            "Supported upgrade sources schema_version must be 1."
+            "Supported upgrade sources schema_version must be 2."
         )
-    versions_raw = raw.get("versions")
-    if not isinstance(versions_raw, dict):
-        raise CompatibilityValidationError("versions must be a mapping.")
+    allowed_raw = raw.get("allowed_patch_targets")
+    if not isinstance(allowed_raw, list):
+        raise CompatibilityValidationError("allowed_patch_targets must be a list.")
 
-    versions: dict[str, UpgradeSource] = {}
-    for version, entry in versions_raw.items():
-        if not isinstance(version, str) or not version:
-            raise CompatibilityValidationError("Version keys must be non-empty strings.")
-        if not isinstance(entry, dict):
+    allowed_targets: list[AllowedPatchTarget] = []
+    seen_targets: set[tuple[str, str, str]] = set()
+    for target in allowed_raw:
+        if not isinstance(target, dict):
             raise CompatibilityValidationError(
-                f"Version entry for {version} must be a mapping."
+                "allowed_patch_targets entries must be mappings."
             )
-        allowed_raw = entry.get("allowed_patch_targets")
-        inherited_version = entry.get("inherits")
-        inherited = None
-        if inherited_version is not None:
-            inherited = versions.get(inherited_version) if isinstance(inherited_version, str) else None
-            if inherited is None or allowed_raw is not None:
-                raise CompatibilityValidationError(
-                    f"inherits for {version} must name an earlier version and replace allowed_patch_targets."
-                )
-            allowed_raw = [target.__dict__ for target in inherited.allowed_patch_targets]
-        if not isinstance(allowed_raw, list):
-            raise CompatibilityValidationError(
-                f"allowed_patch_targets for {version} must be a list."
-            )
-        allowed_targets: list[AllowedPatchTarget] = []
-        seen: set[tuple[str, str, str]] = set()
-        for target in allowed_raw:
-            if not isinstance(target, dict):
-                raise CompatibilityValidationError(
-                    f"allowed_patch_targets entries for {version} must be mappings."
-                )
-            item = AllowedPatchTarget(
-                file=validate_relative_path(
-                    _require_str(target, "file"), allowed_roots=("config",)
-                ),
-                section=_require_str(target, "section"),
-                option=_require_str(target, "option"),
-            )
-            if item.target_tuple in seen:
-                raise CompatibilityValidationError(
-                    f"Duplicate uninstall patch target for {version}: {item.target_tuple}"
-                )
-            seen.add(item.target_tuple)
-            allowed_targets.append(item)
-        source_patches = _parse_source_patches(entry, version)
-        external_files = _parse_external_files(entry, version, inherited)
-        versions[version] = UpgradeSource(
-            version=version,
-            allowed_patch_targets=tuple(allowed_targets),
-            source_patches=source_patches,
-            external_files=external_files,
+        item = AllowedPatchTarget(
+            file=_validate_path(
+                _require_str(target, "file"), allowed_roots=("config",)
+            ),
+            section=_require_str(target, "section"),
+            option=_require_str(target, "option"),
         )
+        if item.target_tuple in seen_targets:
+            raise CompatibilityValidationError(
+                f"Duplicate uninstall patch target: {item.target_tuple}"
+            )
+        seen_targets.add(item.target_tuple)
+        allowed_targets.append(item)
 
-    return UpgradeSources(schema_version=1, versions=versions)
+    source_patches = _parse_source_patches(raw)
+    return UpgradeSources(
+        schema_version=2,
+        allowed_patch_targets=tuple(allowed_targets),
+        source_patches=source_patches,
+        external_files=_parse_external_files(raw),
+    )
 
 
 def validate_manifest_compatibility(
     manifest: Manifest, upgrade_sources: UpgradeSources
 ) -> None:
-    manifest_versions = set(manifest.package.known_versions)
-    supported_versions = set(upgrade_sources.versions.keys())
-    if manifest_versions != supported_versions:
+    if manifest.package.version not in manifest.package.known_versions:
         raise CompatibilityValidationError(
-            "package.known_versions must exactly match supported upgrade-source versions."
+            "Current package.version must occur in package.known_versions."
         )
 
-    current_entry = upgrade_sources.versions.get(manifest.package.version)
-    if current_entry is None:
-        raise CompatibilityValidationError(
-            "Current package.version must exist in supported upgrade sources."
-        )
-
+    allowed_targets = {
+        target.target_tuple for target in upgrade_sources.allowed_patch_targets
+    }
     manifest_targets = {
         patch.target_tuple
         for patch in (*manifest.patches.set_options, *manifest.patches.delete_sections)
     }
-    current_targets = {target.target_tuple for target in current_entry.allowed_patch_targets}
-    if manifest_targets != current_targets:
+    missing_targets = manifest_targets - allowed_targets
+    if missing_targets:
         raise CompatibilityValidationError(
-            "Current package.version uninstall targets must exactly match manifest patches."
+            "Current manifest patch targets are missing from the cumulative envelope."
         )
 
+    allowed_sources = source_patch_provenance(upgrade_sources)
     manifest_sources = {
-        (patch.id, patch.destination, variant.firmware, variant.expected_sha256, variant.desired_sha256)
+        (
+            patch.id,
+            patch.destination,
+            variant.firmware,
+            variant.expected_sha256,
+            variant.desired_sha256,
+        )
         for patch in manifest.install.source_patches
         for variant in patch.variants
     }
-    current_sources = {
-        (item.id, item.destination, item.firmware, item.original_sha256, item.desired_sha256)
-        for item in current_entry.source_patches
-    }
-    if manifest_sources != current_sources:
+    missing_sources = manifest_sources - allowed_sources
+    if missing_sources:
         raise CompatibilityValidationError(
-            "Current package.version source-patch baselines must exactly match the manifest."
+            "Current manifest source-patch baselines are missing from the cumulative envelope."
         )
 
+    allowed_external = {
+        (item.id, item.destination, item.sha256)
+        for item in upgrade_sources.external_files
+    }
     manifest_external = {
         (item.id, item.destination, item.sha256)
         for item in manifest.install.external_files
     }
-    current_external = {
-        (item.id, item.destination, item.sha256)
-        for item in current_entry.external_files
+    if manifest_external - allowed_external:
+        raise CompatibilityValidationError(
+            "Current manifest external-file baselines are missing from the cumulative envelope."
+        )
+
+
+def validate_installed_state_identity(state, manifest: Manifest) -> None:
+    if (
+        state.package_id != manifest.package.id
+        or state.package_version not in manifest.package.known_versions
+    ):
+        raise CompatibilityValidationError(
+            "Installed package identity or version is not admitted by this manifest."
+        )
+
+
+def validate_patch_ledger(state, upgrade_sources: UpgradeSources) -> None:
+    allowed_targets = {
+        target.target_tuple for target in upgrade_sources.allowed_patch_targets
     }
-    if manifest_external != current_external:
-        raise CompatibilityValidationError(
-            "Current package.version external-file baselines must exactly match the manifest."
+    for entry in state.patch_ledger:
+        if entry.target_tuple not in allowed_targets:
+            raise CompatibilityValidationError(
+                "Ledger patch target is not allowed by the cumulative envelope."
+            )
+
+
+def source_patch_provenance(
+    upgrade_sources: UpgradeSources,
+) -> set[tuple[str, str, str, str, str]]:
+    return {
+        (
+            item.id,
+            item.destination,
+            item.firmware,
+            item.original_sha256,
+            item.desired_sha256,
         )
+        for item in upgrade_sources.source_patches
+    }
 
 
-def allowed_target_tuples_for_version(
-    upgrade_sources: UpgradeSources, package_version: str
-) -> set[tuple[str, str, str]]:
-    source = upgrade_sources.versions.get(package_version)
-    if source is None:
-        raise CompatibilityValidationError(
-            f"Unsupported installed package version: {package_version}"
-        )
-    return {target.target_tuple for target in source.allowed_patch_targets}
-
-
-def _parse_source_patches(entry: dict[str, Any], version: str) -> tuple[UpgradeSourcePatch, ...]:
-    raw = entry.get("source_patches", [])
-    if not isinstance(raw, list):
-        raise CompatibilityValidationError(f"source_patches for {version} must be a list.")
+def _parse_source_patches(raw: dict[str, Any]) -> tuple[UpgradeSourcePatch, ...]:
+    source_raw = raw.get("source_patches", [])
+    if not isinstance(source_raw, list):
+        raise CompatibilityValidationError("source_patches must be a list.")
     result: list[UpgradeSourcePatch] = []
-    seen_ids: set[str] = set()
-    seen_destinations: set[str] = set()
-    seen_variants: set[tuple[str, str, str]] = set()
-    for item in raw:
+    seen_ids: dict[str, str] = {}
+    seen_destinations: dict[str, str] = {}
+    seen_provenance: set[tuple[str, str, str, str, str]] = set()
+    for item in source_raw:
         if not isinstance(item, dict):
-            raise CompatibilityValidationError(f"source_patches entries for {version} must be mappings.")
+            raise CompatibilityValidationError("source_patches entries must be mappings.")
         patch_id = _require_str(item, "id")
-        destination = validate_relative_path(
+        destination = _validate_path(
             _require_str(item, "destination"), allowed_roots=("klippy",)
         )
         if not destination.startswith("klippy/extras/"):
-            raise CompatibilityValidationError("Source-patch destinations must stay under klippy/extras/.")
+            raise CompatibilityValidationError(
+                "Source-patch destinations must stay under klippy/extras/."
+            )
         firmware = _require_str(item, "firmware")
         original_sha = _require_sha256(item, "original_sha256")
         desired_sha = _require_sha256(item, "desired_sha256")
-        key = (patch_id, firmware, original_sha)
-        if patch_id in seen_ids and destination not in seen_destinations:
+        if patch_id in seen_ids and seen_ids[patch_id] != destination:
             raise CompatibilityValidationError("Source-patch IDs must use one destination.")
-        if destination in seen_destinations and patch_id not in seen_ids:
-            raise CompatibilityValidationError("Source-patch destinations must use one ID.")
-        if key in seen_variants:
+        if destination in seen_destinations and seen_destinations[destination] != patch_id:
             raise CompatibilityValidationError(
-                "Duplicate source-patch firmware stock baseline."
+                "Source-patch destinations must use one ID."
             )
-        seen_ids.add(patch_id)
-        seen_destinations.add(destination)
-        seen_variants.add(key)
-        result.append(UpgradeSourcePatch(patch_id, destination, firmware, original_sha, desired_sha))
+        provenance = (patch_id, destination, firmware, original_sha, desired_sha)
+        if provenance in seen_provenance:
+            raise CompatibilityValidationError("Duplicate source-patch provenance.")
+        seen_ids[patch_id] = destination
+        seen_destinations[destination] = patch_id
+        seen_provenance.add(provenance)
+        result.append(
+            UpgradeSourcePatch(
+                patch_id, destination, firmware, original_sha, desired_sha
+            )
+        )
     return tuple(result)
 
 
-def _parse_external_files(
-    entry: dict[str, Any],
-    version: str,
-    inherited: UpgradeSource | None,
-) -> tuple[UpgradeSourceExternalFile, ...]:
-    raw = entry.get("external_files")
-    if raw is None:
-        return inherited.external_files if inherited is not None else ()
+def _parse_external_files(entry: dict[str, Any]) -> tuple[UpgradeSourceExternalFile, ...]:
+    raw = entry.get("external_files", [])
     if not isinstance(raw, list):
-        raise CompatibilityValidationError(
-            f"external_files for {version} must be a list."
-        )
+        raise CompatibilityValidationError("external_files must be a list.")
     result: list[UpgradeSourceExternalFile] = []
     destinations_by_id: dict[str, str] = {}
     ids_by_destination: dict[str, str] = {}
     seen: set[tuple[str, str, str]] = set()
     for item in raw:
         if not isinstance(item, dict):
-            raise CompatibilityValidationError(
-                f"external_files entries for {version} must be mappings."
-            )
+            raise CompatibilityValidationError("external_files entries must be mappings.")
         file_id = _require_str(item, "id")
-        destination = validate_relative_path(
+        destination = _validate_path(
             _require_str(item, "destination"), allowed_roots=("klippy",)
         )
         if not destination.startswith("klippy/extras/"):
@@ -236,22 +230,23 @@ def _parse_external_files(
         sha256 = _require_sha256(item, "sha256")
         key = (file_id, destination, sha256)
         if key in seen:
-            raise CompatibilityValidationError(
-                f"Duplicate external-file baseline for {version}: {file_id}"
-            )
+            raise CompatibilityValidationError("Duplicate external-file baseline.")
         if file_id in destinations_by_id and destinations_by_id[file_id] != destination:
-            raise CompatibilityValidationError(
-                "External-file IDs must use one destination."
-            )
+            raise CompatibilityValidationError("External-file IDs must use one destination.")
         if destination in ids_by_destination and ids_by_destination[destination] != file_id:
-            raise CompatibilityValidationError(
-                "External-file destinations must use one ID."
-            )
+            raise CompatibilityValidationError("External-file destinations must use one ID.")
         destinations_by_id[file_id] = destination
         ids_by_destination[destination] = file_id
         seen.add(key)
         result.append(UpgradeSourceExternalFile(file_id, destination, sha256))
     return tuple(result)
+
+
+def _validate_path(path: str, *, allowed_roots: tuple[str, ...]) -> str:
+    try:
+        return validate_relative_path(path, allowed_roots=allowed_roots)
+    except ManifestValidationError as exc:
+        raise CompatibilityValidationError(str(exc)) from exc
 
 
 def _require_sha256(mapping: dict[str, Any], key: str) -> str:

@@ -62,14 +62,9 @@ def validate_state_provenance(
     specs: tuple[ManagedExternalFileSpec, ...],
     upgrade_sources: UpgradeSources,
 ) -> None:
-    source = upgrade_sources.versions.get(state.package_version)
-    if source is None:
-        raise ExternalFileError(
-            "External-file ledger package version is not an approved upgrade source."
-        )
     allowed = {
         (item.id, item.destination, item.sha256)
-        for item in source.external_files
+        for item in upgrade_sources.external_files
     }
     current = {spec.id: spec for spec in specs}
     for record in state.external_files:

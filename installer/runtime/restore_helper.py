@@ -8,7 +8,7 @@ from typing import Callable, TextIO
 
 import yaml
 
-from . import external_files
+from . import external_files, safety
 from .backup import (
     format_backup_display_timestamp,
     list_installer_backups,
@@ -25,6 +25,7 @@ from .backup import (
 from .compatibility import (
     CompatibilityValidationError,
     load_supported_upgrade_sources,
+    validate_installed_state_identity,
 )
 from .errors import ExternalFileError
 from .firmware import detect_firmware_version
@@ -106,6 +107,7 @@ def run_restore_helper(
     archived_state = _snapshot_installed_state(backup_snapshot)
     require_external = requires_external_backup_manifest(
         package_version=parsed.package_version if parsed is not None else None,
+        known_package_versions=manifest.package.known_versions,
         state_declares_source_patches=state_declares_sources,
     )
     source_entries = {
@@ -168,6 +170,10 @@ def run_restore_helper(
         manifest=manifest,
         external=source_external,
         firmware=restore_firmware,
+    )
+    safety.ensure_printer_idle(
+        paths.moonraker_url,
+        **({"urlopen": urlopen} if urlopen is not None else {}),
     )
     process_id = None
     if restart_targets:
@@ -234,7 +240,7 @@ def run_restore_helper(
                         mode=desired_mode,
                         force_mode=True,
                     )
-    except Exception as exc:
+    except BaseException as exc:
         journal.rollback_or_raise(
             exc, backup_label=selection.label, backup_zip_path=selection.path
         )
@@ -277,6 +283,7 @@ def _plan_managed_external_restore(
             compatibility = load_supported_upgrade_sources(
                 paths.installer_root / "supported_upgrade_sources.yaml"
             )
+            validate_installed_state_identity(archived_state, manifest)
             external_files.validate_state_provenance(
                 state=archived_state,
                 specs=manifest.install.external_files,

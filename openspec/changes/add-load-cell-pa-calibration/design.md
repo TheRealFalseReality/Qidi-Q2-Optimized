@@ -144,6 +144,8 @@ The optimized macro/config section remains under `installer/klipper/tltg-optimiz
 
 The response metrics, three-component objective, signed-area corroboration, acceleration-profile agreement gates, and state machine are implemented independently from the behavior contract and locally authored fixtures. No source, formulas, weights, comments, or test vectors are copied from AGPL-licensed PrusaPATuner. External implementations consulted during development are recorded with commit and license provenance.
 
+The [autopa compatibility assessment](../../observations/qidi-load-cell.md#autopa-compatibility-assessment) identifies its isolated step-response analyzer as a possible offline comparison, not a replacement runtime. Its mainline collector cannot supply QIDI conversion timestamps, and its XY wobble, uninterrupted sweep, and automatic application are not adopted. Pressure-conditioning changes and the value of signed-area corroboration remain research questions: retain the existing safety and repeatability gates until controlled Max 4 evidence supports a change. No upstream AGPL implementation is bundled.
+
 ## Risks / Trade-offs
 
 - **Private QIDI CS1237 attributes change between firmware releases** → Confine access to one adapter and keep acquisition disabled until a non-disruptive compatibility transaction is hardware-validated.

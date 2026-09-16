@@ -11,6 +11,7 @@ from .auto_update import (
     auto_updates_configured,
     disable_auto_updates,
 )
+from .box_enablement import saved_variable_verify_marker_path
 from .backup import (
     build_uninstall_backup_label,
     create_config_backup,
@@ -18,7 +19,12 @@ from .backup import (
     prune_installer_backups,
     utc_now,
 )
-from .compatibility import CompatibilityValidationError, allowed_target_tuples_for_version
+from .compatibility import (
+    CompatibilityValidationError,
+    validate_installed_state_identity,
+    validate_patch_ledger,
+)
+from .config_transaction import FileChangePlan, apply_file_change_plan
 from .ensure_lines import has_active_line, remove_active_line
 from .errors import InstalledPackageValidationError, OperationCancelled
 from .firmware import detect_firmware_version_best_effort
@@ -27,7 +33,7 @@ from .interaction import (
     maybe_restart_klipper,
     maybe_restart_pending_service_if_idle,
 )
-from .fs_atomic import atomic_write_text
+from .fs_atomic import atomic_delete
 from .mirror import detect_uninstall_managed_tree_drift, remove_tree
 from .path_safety import ensure_uninstall_paths_safe
 from .source_patches import restore_source_patch, validate_source_state
@@ -50,7 +56,16 @@ from .postflight import verify_uninstall_postflight
 from .preflight import run_uninstall_preflight
 from .rollback import RollbackJournal
 from .state_file import StateValidationError, delete_state_file, load_installed_state
-from .system_optimizations import maybe_prompt_restore_system_optimizations, restore_system_optimizations
+from .system_optimizations import (
+    finalize_legacy_system_ledger_migration,
+    maybe_prompt_restore_system_optimizations,
+    migrate_legacy_system_ledger,
+    recover_pending_legacy_system_ledger_migration,
+    restore_system_optimizations,
+    system_ledger_needs_migration,
+    validate_legacy_system_ledger,
+    validate_system_ledger,
+)
 
 
 
@@ -87,10 +102,13 @@ def run_uninstall(
     reporter.status(messages.CHECKING_INSTALLED_PACKAGE)
     ensure_uninstall_paths_safe(paths=paths, manifest=manifest)
     state_path = paths.printer_data_root / manifest.state_file
+    if not dry_run:
+        recover_pending_legacy_system_ledger_migration(paths, state_path)
     include_line = manifest.include_line
     managed_tree_root = paths.printer_data_root / manifest.managed_tree.destination
     include_line_path = paths.printer_data_root / include_line.file
 
+    pending_saved_variables_marker = saved_variable_verify_marker_path(paths)
     non_patch_markers = {
         "state_file": state_path.exists(),
         "managed_tree": managed_tree_root.exists(),
@@ -107,6 +125,7 @@ def run_uninstall(
         managed_tree=non_patch_markers["managed_tree"],
         include_line=non_patch_markers["include_line"],
         external_files=non_patch_markers["external_files"],
+        pending_saved_variables=pending_saved_variables_marker.exists(),
     )
 
     state = None
@@ -114,7 +133,8 @@ def run_uninstall(
     if state_path.exists():
         try:
             state = load_installed_state(state_path)
-            _validate_uninstall_ledger(state, compatibility)
+            validate_installed_state_identity(state, manifest)
+            validate_patch_ledger(state, compatibility)
         except (StateValidationError, CompatibilityValidationError):
             state_invalid = True
             state = None
@@ -132,6 +152,8 @@ def run_uninstall(
         reporter.debug(event="uninstall.ledger.missing", state_path=state_path)
 
     if not any(non_patch_markers.values()) and not any(patch_markers.values()):
+        if pending_saved_variables_marker.exists() and not dry_run:
+            atomic_delete(pending_saved_variables_marker)
         if not dry_run:
             _disable_enrolled_auto_updates(
                 paths=paths,
@@ -156,6 +178,13 @@ def run_uninstall(
         specs=manifest.install.external_files,
         upgrade_sources=compatibility,
     )
+    try:
+        if system_ledger_needs_migration(state.system_ledger):
+            validate_legacy_system_ledger(state.system_ledger, manifest=manifest, paths=paths, environ=env)
+        else:
+            validate_system_ledger(state.system_ledger, manifest=manifest, paths=paths)
+    except StateValidationError as exc:
+        raise InstalledPackageValidationError() from exc
     validate_source_state(
         state,
         manifest.install.source_patches,
@@ -208,6 +237,31 @@ def run_uninstall(
         package_version=state.package_version,
         moment=started_at,
     )
+    plan = build_uninstall_plan(
+        paths=paths,
+        manifest=manifest,
+        state=state,
+        include_line=include_line,
+        backup_label=backup_label,
+        managed_tree_drift=managed_tree_drift,
+    )
+    reporter.debug(
+        event="uninstall.plan.built",
+        patches=len(plan.patch_results),
+        managed_tree_drift=len(plan.managed_tree_drift),
+    )
+    if not dry_run and system_ledger_needs_migration(state.system_ledger):
+        from dataclasses import replace
+        state = replace(
+            state,
+            system_ledger=migrate_legacy_system_ledger(
+                state.system_ledger,
+                manifest=manifest,
+                paths=paths,
+                environ=env,
+            ),
+        )
+
     backup_zip_path = None
     if not dry_run:
         existing_backups = list_installer_backups(
@@ -258,19 +312,6 @@ def run_uninstall(
             )
 
     reporter.status(messages.UNINSTALLING)
-    plan = build_uninstall_plan(
-        paths=paths,
-        manifest=manifest,
-        state=state,
-        include_line=include_line,
-        backup_label=backup_label,
-        managed_tree_drift=managed_tree_drift,
-    )
-    reporter.debug(
-        event="uninstall.plan.built",
-        patches=len(plan.patch_results),
-        managed_tree_drift=len(plan.managed_tree_drift),
-    )
     if dry_run:
         _emit_uninstall_dry_run_counters(reporter, state)
         result = UninstallResult(
@@ -284,7 +325,7 @@ def run_uninstall(
         reporter.debug(event="uninstall.complete", dry_run=True, backup_label=plan.backup_label)
         return result
 
-    return _execute_uninstall(
+    result = _execute_uninstall(
         paths=paths,
         manifest=manifest,
         reporter=reporter,
@@ -298,6 +339,8 @@ def run_uninstall(
         environ=env,
         run=run,
     )
+    finalize_legacy_system_ledger_migration(paths)
+    return result
 
 
 
@@ -332,6 +375,11 @@ def build_uninstall_plan(
     )
     return UninstallPlan(
         backup_label=backup_label,
+        file_changes=_build_uninstall_file_changes(
+            paths=paths,
+            state=state,
+            include_line=include_line,
+        ),
         managed_tree_intent=managed_tree_intent,
         include_line_intents=include_line_intents,
         external_file_intents=external_file_intents,
@@ -369,7 +417,7 @@ def _execute_uninstall(
     uninstall_counters = _uninstall_counters_template(state)
     uninstall_counters["managed_tree_drift"][0] = 1
     try:
-        touched_files = {state_path, include_line_path}
+        touched_files = {state_path, include_line_path, saved_variable_verify_marker_path(paths)}
         touched_files.update(paths.printer_data_root / entry.file for entry in state.patch_ledger)
         touched_files.update(
             paths.managed_klipper_root / record.destination
@@ -424,37 +472,15 @@ def _execute_uninstall(
             journal.note_write()
             restore_source_patch(paths=paths, entry=entry)
 
-        for entry in state.patch_ledger:
-            path = paths.printer_data_root / entry.file
-            text = klipper_cfg.read_text(path)
-            if entry.option == "__section__":
-                current = _section_text_or_deleted(text, entry.section)
-                result = patches.classify_uninstall_patch(current, entry)
-                patch_results.append(result)
-                if result.classification == patches.UNINSTALL_REVERTED:
-                    new_text = klipper_cfg.append_section(text, result.expected)
-                    journal.note_write()
-                    atomic_write_text(path, new_text)
-            else:
-                resolved = klipper_cfg.resolve_unique_option(text, entry.section, entry.option)
-                result = patches.classify_uninstall_patch(resolved.value, entry)
-                patch_results.append(result)
-                if result.classification == patches.UNINSTALL_REVERTED:
-                    new_text = klipper_cfg.set_option_value(
-                        text, entry.section, entry.option, result.expected
-                    )
-                    journal.note_write()
-                    atomic_write_text(path, new_text)
-            uninstall_counters["patches"][0] += 1
+        patch_results.extend(plan.patch_results)
+        apply_file_change_plan(plan.file_changes, journal=journal)
+        uninstall_counters["patches"][0] = len(state.patch_ledger)
         reporter.emit_uninstall_counters(**_freeze_counters(uninstall_counters))
 
-        if include_line_path.exists():
-            text = klipper_cfg.read_text(include_line_path)
-            new_text = remove_active_line(text, include_line.line)
-            if new_text != text:
-                journal.note_write()
-                atomic_write_text(include_line_path, new_text)
-        uninstall_counters["include_removal"][0] = 1
+        include_changed = any(
+            change.path == include_line_path for change in plan.file_changes
+        )
+        uninstall_counters["include_removal"][0] = int(include_changed)
         reporter.emit_uninstall_counters(**_freeze_counters(uninstall_counters))
 
         for record in state.external_files:
@@ -491,9 +517,12 @@ def _execute_uninstall(
         if state_path.exists():
             journal.note_write()
             delete_state_file(state_path)
+        if saved_variable_verify_marker_path(paths).exists():
+            journal.note_write()
+            atomic_delete(saved_variable_verify_marker_path(paths))
         uninstall_counters["state_remove"][0] = 1
         reporter.emit_uninstall_counters(**_freeze_counters(uninstall_counters))
-    except Exception as exc:
+    except BaseException as exc:
         reporter.debug(
             event="uninstall.failure",
             backup_label=plan.backup_label,
@@ -589,9 +618,7 @@ def _disable_enrolled_auto_updates(*, paths: RuntimePaths, reporter, input_strea
 
 
 def _collect_uninstall_patch_results(
-    *,
-    paths: RuntimePaths,
-    state: InstalledState,
+    *, paths: RuntimePaths, state: InstalledState
 ) -> tuple:
     results = []
     for entry in state.patch_ledger:
@@ -605,6 +632,36 @@ def _collect_uninstall_patch_results(
             results.append(patches.classify_uninstall_patch(resolved.value, entry))
     return tuple(results)
 
+
+def _build_uninstall_file_changes(
+    *, paths: RuntimePaths, state: InstalledState, include_line: EnsureLineSpec
+):
+    file_plan = FileChangePlan()
+    for entry in state.patch_ledger:
+        path = paths.printer_data_root / entry.file
+        text = file_plan.text(path)
+        if entry.option == "__section__":
+            current = _section_text_or_deleted(text, entry.section)
+            result = patches.classify_uninstall_patch(current, entry)
+            if result.classification == patches.UNINSTALL_REVERTED:
+                file_plan.replace_text(path, klipper_cfg.append_section(text, result.expected))
+        else:
+            resolved = klipper_cfg.resolve_unique_option(text, entry.section, entry.option)
+            result = patches.classify_uninstall_patch(resolved.value, entry)
+            if result.classification == patches.UNINSTALL_REVERTED:
+                file_plan.replace_text(
+                    path,
+                    klipper_cfg.set_option_value(
+                        text, entry.section, entry.option, result.expected
+                    ),
+                )
+    path = paths.printer_data_root / include_line.file
+    if path.exists():
+        text = file_plan.text(path)
+        new_text = remove_active_line(text, include_line.line)
+        if new_text != text:
+            file_plan.replace_text(path, new_text)
+    return file_plan.changes()
 
 
 def _section_text_or_deleted(text: str, section: str) -> str:
@@ -649,18 +706,6 @@ def _managed_klipper_entries(manifest: Manifest) -> dict[str, str]:
             for spec in manifest.install.external_files
         },
     }
-
-
-def _validate_uninstall_ledger(state: InstalledState, compatibility) -> None:
-    allowed_targets = allowed_target_tuples_for_version(
-        compatibility, state.package_version
-    )
-    for entry in state.patch_ledger:
-        if entry.target_tuple not in allowed_targets:
-            raise CompatibilityValidationError(
-                "Ledger patch target is not allowed for stored installed package version."
-            )
-
 
 
 def _uninstall_counters_template(state: InstalledState) -> dict[str, list[int]]:
