@@ -1,5 +1,10 @@
 # Changelog
 
+## 26.09.20.1
+- Started the QIDI Q2 runtime port by aligning the checked-in printer geometry, mesh envelope, Z-tilt points, and key hardware-pin sections with the restored `01.01.02.04` stock baseline.
+- Replaced out-of-bounds QIDI macro and optimized helper coordinates for trash access, probe-center checks, screw checks, and manual utility moves with Q2-sized positions.
+- Recentered the slicer fallback front prime line for the Q2 bed width while preserving the existing adaptive/profile-driven placement path.
+
 ## 26.09.15.1
 - Fixed installer QIDI Box tool-slot string quoting so missing mappings and approved mapping corrections save without Klipper literal-parsing errors, including when Box enablement is declined.
 - Fixed manual 3MF metadata rescans to use the archive extractor without deleting QIDI thumbnail files. Rescans join pending extraction instead of duplicating it; failures preserve prior metadata and return an error. The 3MF rescan path rejects escaped, reserved, or missing archives; ordinary G-code rescanning remains unchanged.

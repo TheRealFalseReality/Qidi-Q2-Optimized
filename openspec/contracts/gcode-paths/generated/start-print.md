@@ -22,13 +22,13 @@ Ordered invariants:
 - `G92_ Z{10 - ((nozzle_temperature_initial_layer[initial_tool] - 130) / 14 - 5.0) / 100}`
 - `{if first_layer_print_min[1] - 10 >= print_bed_min[1]}`
 - `G1 X{first_layer_print_min[0]+45} Y{first_layer_print_min[1]-10} F20000`
-- `G1 X218 Y0 F20000`
+- `G1 X158 Y0 F20000`
 - `M109 S[nozzle_temperature_initial_layer]`
 - `G1 E6 F300`
 - `G1 X{first_layer_print_min[0]+5} E20 F1200`
 - `G1 X{first_layer_print_min[0]} E0.8`
-- `G1 X178 E20 F1200`
-- `G1 X173 E0.8`
+- `G1 X118 E20 F1200`
+- `G1 X113 E0.8`
 - `SET_PRINT_MAIN_STATUS MAIN_STATUS=printing`
 
 Forbidden patterns:
@@ -62,13 +62,13 @@ Ordered invariants:
 - `G92_ Z{10 - ((nozzle_temperature_initial_layer[initial_tool] - 130) / 14 - 5.0) / 100}`
 - `{if first_layer_print_min[1] - 10 >= print_bed_min[1]}`
 - `G1 X{first_layer_print_min[0]+45} Y{first_layer_print_min[1]-10} F20000`
-- `G1 X218 Y0 F20000`
+- `G1 X158 Y0 F20000`
 - `M109 S[nozzle_temperature_initial_layer]`
 - `G1 E6 F300`
 - `G1 X{first_layer_print_min[0]+5} E20 F1200`
 - `G1 X{first_layer_print_min[0]} E0.8`
-- `G1 X178 E20 F1200`
-- `G1 X173 E0.8`
+- `G1 X118 E20 F1200`
+- `G1 X113 E0.8`
 - `SET_PRINT_MAIN_STATUS MAIN_STATUS=printing`
 
 Forbidden patterns:
@@ -481,12 +481,12 @@ Ordered invariants:
 - `G90`
 - `M204 S10000`
 - `{% for i in range(2) %}`
-- `G1 X163 F8000`
-- `G1 X145 F5000`
+- `G1 X103 F8000`
+- `G1 X90 F5000`
 - `{% endfor %}`
 - `{% for i in range(3) %}`
-- `G1 X175 F6000`
-- `G1 X163 F6000`
+- `G1 X114 F6000`
+- `G1 X100 F6000`
 - `{% endfor %}`
 - `M400`
 - `SET_VELOCITY_LIMIT ACCEL={saved_accel}`
@@ -557,10 +557,10 @@ Ordered invariants:
 
 - `OPTIMIZED_MOVE_TO_TRASH`
 - `M204 S10000`
-- `G1 Y{km.park_y - 50} F{opt.rear_scrape_orient_speed_xy}`
-- `G1 X380 F{opt.rear_scrape_orient_speed_xy}`
-- `G1 X188 F{opt.rear_scrape_orient_speed_xy}`
-- `G1 Y395 F{opt.trash_final_approach_speed_xy}`
+- `G1 Y260 F{opt.rear_scrape_orient_speed_xy}`
+- `G1 X125 F{opt.rear_scrape_orient_speed_xy}`
+- `G1 X130 F{opt.rear_scrape_orient_speed_xy}`
+- `G1 Y280 F{opt.trash_final_approach_speed_xy}`
 - `G1 Z-0.2 F480`
 - `G1 X15 F200`
 - `G1 Y2`
@@ -572,7 +572,7 @@ Ordered invariants:
 - `G2 I0.5 J0.5`
 - `G2 I0.5 J0.5`
 - `G1 Z10`
-- `G1 Y383 F12000`
+- `G1 Y260 F12000`
 - `SET_VELOCITY_LIMIT ACCEL={saved_accel}`
 
 Forbidden patterns:

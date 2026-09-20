@@ -33,7 +33,7 @@ G92_ Z{10 - ((nozzle_temperature_initial_layer[initial_tool] - 130) / 14 - 5.0) 
 {if first_layer_print_min[0]+45 <= print_bed_max[0]}
 G1 X{first_layer_print_min[0]+45} Y{first_layer_print_min[1]-10} F20000
 {else}
-G1 X218 Y0 F20000
+G1 X158 Y0 F20000
 {endif}
 {else}
 G1 X218 Y0 F20000
@@ -55,14 +55,14 @@ G1 X{first_layer_print_min[0]+5} E20 F1200
 G1 F6000
 G1 X{first_layer_print_min[0]} E0.8
 {else}
-G1 X178 E20 F1200
+G1 X118 E20 F1200
 G1 F6000
-G1 X173 E0.8
+G1 X113 E0.8
 {endif}
 {else}
-G1 X178 E20 F1200
+G1 X118 E20 F1200
 G1 F6000
-G1 X173 E0.8
+G1 X113 E0.8
 {endif}
 ; Lift off after the tapered finish.
 G1 Z1 F1200

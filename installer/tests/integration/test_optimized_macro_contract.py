@@ -45,7 +45,7 @@ class OptimizedMacroContractTests(unittest.TestCase):
         self.assertIn("screw_thread: CW-M4", helpers)
 
         probe_gcode = self._macro_gcode("TLTG_PROBE_ACCURACY_CENTER")
-        self.assertIn("G1 X195 Y195 F24000", probe_gcode)
+        self.assertIn("G1 X135 Y135 F24000", probe_gcode)
         self.assertIn("PROBE_ACCURACY SAMPLES={samples}", probe_gcode)
         self.assertNotIn("params.X", probe_gcode)
         self.assertNotIn("params.Y", probe_gcode)
@@ -551,7 +551,7 @@ class OptimizedMacroContractTests(unittest.TestCase):
         self.assertIn("variable_rear_scrape_orient_speed_xy: 24000", globals_text)
 
         move_to_trash = self._macro_gcode("OPTIMIZED_MOVE_TO_TRASH")
-        self.assertEqual(move_to_trash.count("F{opt.trash_final_approach_speed_xy}"), 4)
+        self.assertEqual(move_to_trash.count("F{opt.trash_final_approach_speed_xy}"), 2)
         self.assertNotIn("F3500", move_to_trash)
 
         mixed_wipe = self._macro_gcode("_OPTIMIZED_START_PRE_SCRAPE_WIPE")
@@ -562,12 +562,12 @@ class OptimizedMacroContractTests(unittest.TestCase):
             "G90",
             "M204 S10000",
             "{% for i in range(2) %}",
-            "G1 X163 F8000",
-            "G1 X145 F5000",
+            "G1 X103 F8000",
+            "G1 X90 F5000",
             "{% endfor %}",
             "{% for i in range(3) %}",
-            "G1 X175 F6000",
-            "G1 X163 F6000",
+            "G1 X114 F6000",
+            "G1 X100 F6000",
             "{% endfor %}",
             "M400",
             "SET_VELOCITY_LIMIT ACCEL={saved_accel}",
@@ -596,10 +596,10 @@ class OptimizedMacroContractTests(unittest.TestCase):
             scrape,
             "OPTIMIZED_MOVE_TO_TRASH",
             "M204 S10000",
-            "G1 Y{km.park_y - 50} F{opt.rear_scrape_orient_speed_xy}",
-            "G1 X380 F{opt.rear_scrape_orient_speed_xy}",
-            "G1 X188 F{opt.rear_scrape_orient_speed_xy}",
-            "G1 Y395 F{opt.trash_final_approach_speed_xy}",
+            "G1 Y260 F{opt.rear_scrape_orient_speed_xy}",
+            "G1 X125 F{opt.rear_scrape_orient_speed_xy}",
+            "G1 X130 F{opt.rear_scrape_orient_speed_xy}",
+            "G1 Y280 F{opt.trash_final_approach_speed_xy}",
             "G1 Z-0.2 F480",
             "G1 X15 F200",
             "G1 Y2",
@@ -611,7 +611,7 @@ class OptimizedMacroContractTests(unittest.TestCase):
             "G2 I0.5 J0.5",
             "G2 I0.5 J0.5",
             "G1 Z10",
-            "G1 Y383 F12000",
+            "G1 Y260 F12000",
             "SET_VELOCITY_LIMIT ACCEL={saved_accel}",
         )
         self.assertEqual(scrape.count("G2 I0.5 J0.5"), 3)

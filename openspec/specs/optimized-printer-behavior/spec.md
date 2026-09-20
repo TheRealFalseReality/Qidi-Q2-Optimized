@@ -77,12 +77,12 @@ OrcaSlicer and QIDI Studio packs SHALL implement the same functional print-start
 #### Scenario: Fresh Box filament retains vendor ownership
 - **WHEN** the Box is enabled and retained reuse is not proven
 - **THEN** start delegates feeder, cutter, retry, runout, RFID, and vendor cleaning ownership to the Box stack
-- **AND** optimized purge cleanup runs before a full-width cable-chain orientation traverse and rear scraping across the stock Y395–Y397 footprint
+- **AND** optimized purge cleanup runs before the machine-specific rear-cleaning traverse and rear scraping footprint
 
 #### Scenario: External spool avoids Box-only actions
 - **WHEN** the Box is unavailable or disabled
 - **THEN** retained Box state is invalidated and Box load or purge actions are not called
-- **AND** non-extruding rear cleaning uses the same cable-chain orientation and stock Y395–Y397 scrape footprint before common print preparation
+- **AND** non-extruding rear cleaning uses the same machine-specific orientation and rear scraping footprint before common print preparation
 
 #### Scenario: Prime line remains first-layer aware
 - **WHEN** common preparation completes
@@ -170,7 +170,7 @@ Optimized cut, purge, cooldown, cleaning, calibration, and cancellation helpers 
 - **WHEN** a fresh Box or external-spool start reaches an existing guarded pre-scrape chute wipe
 - **THEN** each wipe uses two broad alternating-speed cycles followed by three finishing cycles at commanded 100 mm/s
 - **AND** existing repeated cooldown wipe stages, temperature thresholds, conditional execution, purge quantities, and waste-release positioning are preserved rather than collapsed into one wipe
-- **AND** the existing cooled rectangular rear-bed scrape is followed by three small circles with its cable-chain orientation and temperature safety gate intact
+- **AND** the existing cooled rear-bed scrape is followed by three small circles with its orientation and temperature safety gate intact
 
 #### Scenario: Cooled scraping finishes with fast chute wiping
 - **WHEN** a fresh Box or external-spool start completes its rear-bed scrape and guarded chute cleanup is available
